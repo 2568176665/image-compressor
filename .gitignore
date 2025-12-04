@@ -1,4 +1,7 @@
 /.venv
 /input
 /output
+/build
+/dist
 /compression.log
+/image_compressor.spec
