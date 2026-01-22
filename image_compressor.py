@@ -353,7 +353,6 @@ class ImageCompressorApp:
                 pass  # 失败则进入下面的通用逻辑
 
         # --- 策略 2: 通用二分查找法 (Binary Search) ---
-        # 相比原先的线性查找(20次)，二分法只需约 5-6 次即可找到最佳点
         # 智能初始质量估算
         original_size = os.path.getsize(input_file)
         ratio = target_size / original_size
