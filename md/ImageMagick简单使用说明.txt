@@ -1,0 +1,349 @@
+ImageMagick 工具集
+ImageMagick命令行工具可以像这样简单：
+
+magick image.jpg image.png
+
+否则，它可能会由于众多选项而变得复杂，如下所示：
+
+magick label.gif +matte \
+   \( +clone -shade 110x90 -normalize -negate +clone -compose Plus -composite \) \
+   \( -clone 0 -shade 110x50 -normalize -channel BG -fx 0 +channel -matte \) \
+   -delete 0 +swap -compose Multiply -composite button.gif");
+
+这个示例命令足够长，因此必须跨几行编写该命令，因此为了清晰起见，我们通过插入反斜杠（\）对其进行了格式化。反斜杠是Unix的行继续符。在Windows Shell中，使用克拉字符（^）进行换行。如上所述，我们在这些网页上使用Unix风格。但是，有时，如果浏览器窗口足够小，则这些行将由您的浏览器包裹起来，但是以白色显示的命令行仍应被键入为一行。无需输入行继续字符。在括号被转义上面使用反斜杠在Windows中不会转义。Windows和Unix之间还有其他一些区别（例如，引号），但是稍后将讨论其中的一些问题。
+
+在不了解ImageMagick命令行的情况下，您可能会猜测上面的第一个命令会将JPEG格式的图像转换为PNG格式的图像。但是，很少有人会意识到第二个更复杂的命令，即为平坦的二维标签提供具有丰富纹理和模拟深度的三维外观：
+
+  
+
+在这里，我们以阴影圆柱体形式显示任务的完成百分比：
+
+
+
+考虑到渲染的复杂性，您可能会惊讶于它是通过单个命令行完成的：
+
+magick -size 320x90 canvas:none -stroke snow4 -size 1x90 -tile gradient:white-snow4 \
+   -draw 'roundrectangle 16, 5, 304, 85 20,40' +tile -fill snow \
+   -draw 'roundrectangle 264, 5, 304, 85 20,40' -tile gradient:chartreuse-green \
+   -draw 'roundrectangle 16, 5, 180, 85 20,40' -tile gradient:chartreuse1-chartreuse3 \
+   -draw 'roundrectangle 140, 5, 180, 85 20,40' +tile -fill none \
+   -draw 'roundrectangle 264, 5, 304, 85 20,40' -strokewidth 2 \
+   -draw 'roundrectangle 16, 5, 304, 85 20,40' \( +clone -background snow4 \
+   -shadow 80x3+3+3 \) +swap -background none -layers merge \( +size -pointsize 90 \
+   -strokewidth 1 -fill red label:'50 %' -trim +repage \( +clone -background firebrick3 \
+   -shadow 80x3+3+3 \) +swap -background none -layers merge \) -insert 0 -gravity center \
+   -append -background white -gravity center -extent 320x200 cylinder_shaded.png
+
+在接下来的部分中，我们将剖析ImageMagick命令行的结构。希望在仔细阅读并更好地了解命令行的工作原理之后，您应该能够完成复杂的图像处理任务，而不必诉诸有时令人生畏的程序界面。
+
+从命令行使用ImageMagick时，请参阅ImageMagick使用示例以获取更多帮助。
+
+命令行剖析
+ImageMagick命令行包括
+
+一个或多个必需的输入文件名。
+零个，一个或多个图像设置。
+零个，一个或多个图像运算符。
+零个，一个或多个图像序列运算符。
+零个，一个或多个图像堆栈。
+零个或一个输出图像文件名（convert， composite， montage， compare， import， conjure）。
+您可以在以下各节中找到命令行的每个组成部分的详细说明。
+
+输入文件名
+ImageMagick扩展了输入文件名的概念，使其包括：
+
+文件名遍历
+明确的图像格式
+使用内置的图像和图案
+STDIN，STDOUT和文件描述符
+从图像中选择某些帧
+选择图像区域
+强制调整内联图像的大小
+强制内联图像裁剪
+使用文件名引用
+这些扩展将在接下来的几段中进行说明。
+
+文件名通配
+在Unix shell中，某些字符（例如星号（*）和问号（?））会自动根据模式匹配来生成文件名列表。此功能称为“通配”。ImageMagick支持本地不支持Windows等系统的文件名。例如，假设你要转换1.jpg，2.jpg，3.jpg，4.jpg，和5.jpg在当前目录为GIF动画。您可以使用以下命令方便地引用所有JPEG文件：
+
+magick *.jpg images.gif
+
+显式图像格式
+图像以多种图像格式存储，包括众所周知的JPEG，PNG，TIFF等。ImageMagick必须先知道图像的格式，然后才能对其进行读取和处理。大多数格式在图像中都有一个签名，用于唯一标识格式。失败的是，ImageMagick利用文件扩展名来确定格式。例如，image.jpg或image.JPG告诉ImageMagick它正在读取JPEG格式的图像。
+
+在某些情况下，图像可能不包含签名和/或文件名不能识别图像格式。在这些情况下，必须指定显式图像格式。例如，假设我们的图像已命名image并且包含原始的红色，绿色和蓝色强度值。ImageMagick无法自动确定图像格式，因此我们明确设置了一种：
+
+magick -size 640x480 -depth 8 rgb:image image.png
+
+内置图像和图案
+ImageMagick具有许多内置的图像和图案。例如，要使用棋盘格图案，请使用：
+
+magick -size 640x480 pattern:checkerboard checkerboard.png
+
+STDIN，STDOUT和文件描述符
+Unix和Windows允许将一个命令的输出通过管道传递给另一命令的输入。ImageMagick允许使用伪文件名分别从标准流 STDIN（标准输入）和STDOUT（标准输出）读取和写入图像数据-。在此示例中，我们将convert的输出 传递给显示程序：
+
+magick logo: gif:- | display gif:-
+
+gif:在前面的示例中，第二种显式格式“ ”是可选的。GIF图像格式在图像中具有唯一的签名，因此ImageMagick的display命令可以很容易地将格式识别为GIF。该转换程序也接受STDIN以这种方式输入：
+
+magick rose: gif:- | magick - -resize "200%" bigrose.jpg'
+
+其他管道可以通过其文件描述符（自6.4.9-3版开始）进行访问。文件描述符0、1和2分别为标准流STDIN，STDOUT和STDERR保留，但是可以使用假名N访问与文件描述符编号N > 2 相关的管道。（化名，并且可用于STDIN和STDOUT。）下一个示例显示如何附加从描述符3和4的文件中管道传输的图像数据，并将结果定向到描述符编号5的文件。 fd:fd:0fd:1
+
+magick fd:3 fd:4 -append fd:5
+
+必要时，可以如下所述提供显式图像格式。
+
+magick gif:fd:3 jpg:fd:4 -append tif:fd:5
+
+选择框架
+某些图像格式包含多个图像帧。也许您只需要第一张图像，最后一张图像或中间的一些图像。您可以通过将图像文件名附加在方括号内的帧范围来指定要读取的图像帧。在这里，我们的图像（动画GIF）包含多个帧，但是我们只需要第一个帧：
+
+magick 'images.gif[0]' image.png
+
+Unix shell通常会解释方括号，因此我们在上面的引号中加上了文件名。在Windows命令外壳程序中，不解释方括号，但使用引号不会造成伤害。但是，在大多数情况下，相对于Unix和Windows，单引号和双引号的作用相反，因此Windows用户通常应在显示单引号的地方尝试双引号，反之亦然。
+
+您可以从具有帧范围的序列中读取多个图像。例如，您可以提取图像序列的前四帧：
+
+magick 'images.gif[0-3]' images.mng
+
+最后，您可以乱序读取多个图像。下一个命令获取序列中的第三个图像，然后是第二个，然后是第四个：
+
+magick 'images.gif[3,2,4]' images.mng
+
+请注意，在最后两个命令中，写入了单个图像。在这种情况下，图像类型为MNG的输出是多帧文件，因为MNG格式支持多帧。如果输出格式为JPG（仅支持单个帧），则输出将包含单独的帧。有关输出文件名的部分，请参见下面的更多内容。
+
+选择图像区域
+原始图像是一系列颜色强度，没有其他元信息，例如宽度，高度或图像签名。对于原始图像格式，必须指定图像的宽度和高度，但也可以指定要读取的图像区域。在我们的示例中，图像为原始8位RGB格式，宽度为6000像素，高度为4000像素。但是，我们只想要图像中心附近的600 x 400区域：
+
+magick -size 6000x4000 -depth 8 'rgb:image[600x400+1900+2900]' image.jpg
+
+您可以使用-extract选项获得相同的结果：
+
+magick -size 6000x4000 -depth 8 -extract 600x400+1900+2900 rgb:image image.jpg
+
+内联图像调整大小
+有时在读取图像时调整图像大小很方便。假设您有数百张要转换为PNG缩略图的大JPEG图像：
+
+magick '*.jpg' -resize 120x120 thumbnail%03d.png
+
+此处读取所有图像，然后调整大小。在读取每个图像时，调整其大小更快，更省资源：
+
+magick '*.jpg[120x120]' thumbnail%03d.png
+
+在线图像裁剪
+有时在读取图像时裁剪图像很方便。假设您有数百张要转换为PNG缩略图的大JPEG图像：
+
+magick '*.jpg' -crop 120x120+10+5 thumbnail%03d.png
+
+此处读取所有图像，然后裁剪。读取每个图像时，裁剪图像的速度更快且资源占用更少：
+
+magick '*.jpg[120x120+10+5]' thumbnail%03d.png
+
+文件名引用
+有两种方法可以使用文件名来引用其他图像文件名。第一个带有' @'，它从指定文件中读取由空格分隔的图像文件名。假设文件myimages.txt由文件名列表组成，如下所示：
+
+frame001.jpg
+frame002.jpg
+frame003.jpg
+
+然后，我们期望以下命令：
+
+magick @myimages.txt mymovie.gif
+
+读取图像frame001.jpg，frame002.jpg和frame003.jpg，并将其转换为GIF图像序列。
+
+如果图像路径包含一个或多个空格，请将该路径用引号引起来：
+
+'my title.jpg'
+
+一些ImageMagick命令行选项可能超出了命令行处理器的功能。例如，Windows将命令行限制为8192个字符。例如，如果您有一个绘图选项，其多边形点超过了命令行的长度限制，则将绘图选项放到文件中，然后使用@（例如@mypoly.txt）引用该文件。
+
+引用其他图像文件的另一种方法是通过在具有场景范围的文件名中嵌入格式设置字符。考虑文件名image-%d.jpg[1-5]。命令
+
+magick image-%d.jpg[1-5]
+
+使ImageMagick尝试读取具有以下文件名的图像：
+
+image-1.jpg
+image-2.jpg
+image-3.jpg
+image-4.jpg
+image-5.jpg
+
+流缓冲
+默认情况下，输入流被缓冲。为了确保尽快读取源文件或终端上的信息，请将缓冲区大小设置为0：
+
+magick logo: gif:- | display -define stream:buffer-size=0 gif:-
+
+命令行选项
+您可以使用以下命令行选项来指示ImageMagick实用程序的行为。期权的行为属于以下类别之一：
+
+影像设定
+影像运算子
+影像频道操作员
+图像序列运算符
+影像几何
+图像堆栈
+影像设定
+图像设置会一直显示在命令行中，并且可能会影响后续处理，例如读取图像，图像运算符或在适当时写入图像。图像设置将一直有效，直到被重置或命令行终止。图像设置包括：
+
+-adjoin  -affine  -alpha  -antialias  -authenticate  -background  -bias  -black-point-compensation  -blue-primary  -bordercolor  -caption  -channel  -comment  -compress  -debug  -define  -delay  -density  -depth  -direction  -display  -dispose  -dither  -encoding  -endian  -extract  -family  -fill  -filter  -font  -format  -fuzz  -geometry  -gravity  -green-primary  -interlace  -intent  -interpolate  -label  -limit  -linewidth  -log  -loop  -mattecolor  -monitor  -orient  -page  -pointsize  -preview  -quality  -quiet  -read-mask  -red-primary  -region  -render  -repage  -sampling-factor  -scene  -seed  -size  -stretch  -stroke  -strokewidth  -style  -texture  -tile  -transparent-color  -treedepth  -type  -undercolor  -units  -verbose  -virtual-pixel  -weight  -write-mask
+
+在此示例中，-channel适用于每个图像，因为正如我们提到的那样，设置仍然存在：
+
+magick -channel RGB wand.png wizard.png images.png
+
+影像操作符
+图像运算符与设置的不同之处在于，它会像在命令行上一样立即影响图像。运算符是任何未作为图像设置或 图像序列运算符列出的 命令行选项。图像设置会一直持续到命令行终止，而图像设置与之不同，运算符将应用于当前图像集并被遗忘。图像运算符包括：
+
+-annotate  -black-threshold  -blur  -border  -charcoal  -chop  -clip  -clip-path  -clip-mask  -colors  -colorize  -colorspace  -compose  -contrast  -convolve  -crop  -cycle  -despeckle  -draw  -edge  -emboss  -enhance  -equalize  -evaluate  -extent  -flip  -flop  -floodfill  -frame  -gamma  -gaussian-blur  -grayscale  -implode  -lat  -level  -map  -median  -modulate  -monochrome  -negate  -noise  -normalize  -opaque  -ordered-dither  -paint  -posterize  -raise  -profile  -radial-blur  -raise  -random-threshold  -resample  -resize  -roll  -rotate  -sample  -scale  -sepia-tone  -segment  -shade  -shadow  -sharpen  -shave  -shear  -sigmoidal-contrast  -solarize  -splice  -spread  -strip  -swirl  -threshold  -transparent  -thumbnail  -tint  -transform  -trim  -unsharp  -version  -wave  -white-point  -white-threshold
+
+在此示例中，-negate使魔杖图像无效，但向导无效：
+
+magick wand.png -negate wizard.png images.png
+
+注意，图像运算符将应用于图像序列中的每个图像。例如，如果使用-resize选项调整GIF图像的大小，则将每个帧调整为给定的大小。但是，某些帧可能小于整个图像，并且将所有帧调整为相同大小可能会导致意外输出。在这种情况下， 应使用-coalece来准备那些框架。
+
+影像频道操作符
+直接在图像通道上操作：
+
+-channel-fx  -separate
+
+图像序列操作符
+图像序列运算符与设置的不同之处在于，它会在出现在命令行中时立即影响图像序列。从以下图像序列运算符中选择：
+
+-append  -affinity  -average  -clut  -coalesce  -combine  -compare  -complex  -composite  -copy  -crop  -debug  -deconstruct  -delete  -evaluate-sequence  -fft  -flatten  -fx  -hald-clut  -ift  -identify  -insert  -layers  -limit  -map  -maximum  -minimum  -morph  -mosaic  -optimize  -print  -process  -quiet  -swap  -write
+
+在此示例中，-append将三个图像附加到一个图像中：
+
+magick mikayla.png picnic.png beach.png -append vacation.png
+
+影像几何
+许多命令行选项采用几何参数来指定诸如所需的图像宽度和高度以及其他尺寸数量之类的内容。因为用户想要图像的最终尺寸，大小和位置有如此多的变化（并且因为ImageMagick要提供它们），所以geometry参数可以采用多种形式。我们将在本节中描述其中的许多内容。
+
+采用某些几何参数形式的图像选项和设置包括以下内容。请记住，其中一些以稍微不同的方式解析其参数。有关更多选项，请参见有关单个选项或设置的文档。
+
+-adaptive-resize  -border  -borderwidth  -chop  -crop  -density  -extent  -extract  -frame  -geometry  -iconGeometry  -liquid-rescale  -page  -region  -repage  -resize  -sample  -scale  -shave  -splice  -thumbnail  -window
+
+该几何参数可能会采取任何在下面的表中列出的形式。这些将在表格后面的小节中详细介绍。通常的格式是size [ offset ]，这表示需要大小，而offset是可选的。有时，[ size ] 偏移是可能的。在任何情况下，几何参数中都不允许有空格。
+
+尺寸概述（实际行为可能因不同的选项和设置而异）
+scale%高度和宽度均按指定的百分比缩放。
+scale-x % x scale-y %高度和宽度分别按指定的百分比缩放。（只需要一个％符号。）
+width给定宽度，高度自动选择以保留宽高比。
+x height给定高度，自动选择宽度以保留宽高比。
+width x height给定高度和宽度的最大值，并保留宽高比。
+width x height ^给定宽度和高度的最小值，并保留宽高比。
+width x height !着重给出宽度和高度，忽略原始宽高比。
+width x height >缩小尺寸大于相应的宽度和/或高度参数的图像。
+width x height <放大尺寸小于相应的宽度和/或高度参数的图像。
+area@调整图像大小以具有以像素为单位的指定区域。长宽比被保留。
+x : y在此，x和y表示纵横比（例如3：2 = 1.5）。
+{size}{offset}指定偏移量（默认为+0+0）。下方的{ size }是指以上任何形式。
+{size}{+-}x{+-}y以像素为单位指定的水平和垂直偏移x和y。两者都需要标牌。偏移量受重力设置的影响。偏移不受%或其他尺寸运算符的影响。请注意，对于所有重力选项（“中心”除外），X和Y的正偏移都朝着图像中心向内。对于东部，剩下+ X。对于南方，+ Y上升。对于东南，+ X左，+ Y向上。对于中心，使用常规的X和Y方向约定（+ X在右边，+ Y在下面）。
+宽度和高度的基本调整; % ^ ! 操作符
+以下是一些简单的几何示例，展示了如何将其用作-resize选项的参数。我们将内部图像logo:用作输入图像。 此精细图像的宽度为640像素，高度为480像素。我们说它的尺寸是640x480。当我们给出图像的尺寸时，宽度（水平尺寸）总是在高度（垂直尺寸）之前。当我们谈到图像中的坐标或偏移量时，这将是正确的，它始终是x值，后跟y。试想一下您的高中代数班和xy平面。（嗯，差不多：我们y–轴将始终向下！）
+
+magick logo: -resize '200%' bigWiz.png
+magick logo: -resize '200x50%' longShortWiz.png
+magick logo: -resize '100x200' notThinWiz.png
+magick logo: -resize '100x200^' biggerNotThinWiz.png
+magick logo: -resize '100x200!' dochThinWiz.png
+
+四个命令中的第一个很简单-它沿200%每个方向拉伸输入图像的宽度和高度。它将整个事物放大两倍。第二个命令为每个方向指定不同的百分比，将宽度拉伸到200％，将高度挤压到50%。生成的图像（在此示例中）尺寸为1280x240。注意，不需要重复百分号；以下是等价的：200x50%，200%x50，200%x50%。
+
+默认情况下，除非指定百分比，否则几何参数中给出的宽度和高度是最大值。即，在保持图像的纵横比（图像的高度与宽度之比）的同时，对图像进行缩放以使其适合指定的宽度和高度值。例如，上方的第三个命令“尝试”以将尺寸设置为100x200。想象一下逐渐缩小原始图像（640x480），保持宽高比不变，直到它恰好适合100x200矩形。由于图像长于长高，因此当其宽度缩小到100像素时将适合。为了保持宽高比，因此高度必须为（480/640）×100像素= 75像素，因此最终尺寸将为100x75。
+
+请注意，在上一个示例中，将至少达到一个指定的尺寸（在这种情况下，宽度为100像素）。生成的图像恰好适合原始图像。^如上面的第四个示例，可以通过调用运算符来实现相反的操作。在这种情况下，当100x200^作为参数给出时，将再次获得至少一个尺寸，但是在这种情况下，生成的图像可以紧密地包含原始图像。这里的geometry参数给出了最小值。在我们的示例中，高度将变为200，宽度将被缩放以保留纵横比，变为（640/480）×200像素= 267像素。随着^运算符，其中一个尺寸将与请求的尺寸匹配，但是图像可能会超出要求的尺寸，以保持其宽高比。（该^功能是IM 6.3.8-2的新增功能。）
+
+我们看到ImageMagick在保留图像的高宽比方面非常有用，可以防止您喜欢的照片和图像失真。但是您可能真的希望尺寸为100x200，从而拉伸图像。在这种情况下，只需告诉ImageMagick，您就可以通过向几何图形附加感叹号来真正做到这一点（！）。这将强制图像大小精确到您指定的大小。因此，例如，如果您指定100x200!尺寸，尺寸将恰好变为100x200（给出了一个小的垂直延伸的向导）。
+
+界定 width, height, area; >, <, @ 操作符
+以下是一些示例：
+
+magick logo: -resize '100' wiz1.png
+magick logo: -resize 'x200' wiz2.png
+magick logo: -resize '100x200>' wiz3.png
+magick logo: -resize '100x200<' wiz4.png
+
+如果仅给出一个尺寸，则将其视为宽度。当仅指定宽度时，如上面的第一个示例中所示，该宽度将按给定接受，并选择高度以保持输入图像的长宽比。类似地，如果仅指定高度，则如上面的第二个示例中所示，将接受高度并选择宽度以保持纵横比。
+
+使用>缩小图像只有如果其尺寸（一个或多个）是较大比相应的宽度和/或高度的参数。使用<放大的图像只有如果其尺寸（一个或多个）是较小的比相应的宽度和/或高度的参数。在任何一种情况下，如果进行了更改，则结果就好像不存在>或者<操作符。因此，在上面的第三个示例中，我们指定了100x200>原始图像大小，并且原始图像大小为640x480，因此减小了图像大小，就像我们指定了一样100x200。但是，在上面的第四个示例中，其大小没有变化。
+
+最后，@再次使用来指定图像的最大面积（以像素为单位），同时尝试保持宽高比。（像素仅采用整数值，因此始终需要一些近似值。）在下面的示例中，要求使用10000像素的区域。生成的文件尺寸为115x86，具有9890像素。
+
+magick logo: -resize '10000@' wiz10000.png
+
+在上面和下面的所有示例中，我们都将几何参数括在引号中。在许多情况下，这样做是可选的，但并非总是如此。我们必须使用时，用引号引起来的几何形状规格<或>防止这些字符不被Shell作为被解释文件重定向。在Windows系统上，克拉^ 必须在引号内，否则将被忽略。为了安全起见，我们应该养成一种习惯，就是将所有几何参数都用引号引起来，就像我们在这里所提到的那样。
+
+几何偏移
+以下是一些示例，以说明在几何参数中使用偏移量的情况。偏移量的一种典型用法是与-region选项结合使用 。此选项允许许多其他选项来修改图像的指定矩形子区域内的像素。这样，需要给定该区域的宽度和高度，以及图像的偏移量，该偏移量是指示该区域在较大图像内的位置的一对坐标。下面，在第一个示例中，我们指定一个大小为xy的区域- 坐标x = 10，y = 20。让我们使用常用的代数符号（x，y100x200）=（10,20），为方便起见。
+
+magick logo: -region '100x200+10+20' -negate wizNeg1.png
+magick logo: -region '100x200-10+20' -negate wizNeg2.png
+magick logo: -gravity center -region '100x200-10+20' -negate wizNeg3.png
+
+请注意，偏移量始终需要+/-符号。偏移量实际上不是图像中的真实位置；它的坐标必须添加到其他位置。让我们将其称为当前位置。但是，在上面的前两个示例中，该位置是图像的左上角，其坐标为（0,0）。（这是默认情况，没有其他指令可以更改它。）上面的第一个示例将100x200矩形自己的左上角放在（10,20）。
+
+在许多情况下，负偏移量是有意义的。在上面的第二个示例中，偏移量是（-10,20），由指定-10+20。在这种情况下，只能否定所获得的（虚拟）矩形位于图像内的部分；在这里等效于将几何指定为90x200+0+20。
+
+在上面的第三个示例中，重力设置位于其他设置之前，并在图像的正中心设置图像中的当前位置。在这种情况下，像素为（320,240），因为图像的大小为640x480。这意味着偏移量适用于该位置，因此在这种情况下，该位置将移动到（320-10,240 + 20）=（310,260）。但是该100x200区域本身受重力设置的影响，因此可以确定该区域自己的中心（位于其中的（+ 50，+ 100）而不是其左上角）。因此，100x200矩形的中心移至（310,260）。否定的矩形的左上角现在为（310-50,260-100）=（260,160）。
+
+图像堆栈
+在学校里，您的老师可能允许您在一张纸上处理问题，然后将结果复制到测试纸上。图像堆栈类似。它允许您单独处理图像或图像序列，然后将结果返回到命令行。图像堆栈用括号标出。图像运算符仅影响当前堆栈中的图像。例如，我们可以将图像旋转限制为仅向导图像，如下所示：
+
+magick wand.gif \( wizard.gif -rotate 30 \) +append images.gif
+
+再次注意，括号逃脱用反斜杠前面他们。在Unix下，这是必需的，其中括号是特殊的 shell字符。反斜杠告诉外壳程序不要解释这些字符，而是将它们直接传递给正在执行的命令。在Windows下不要转义括号。如上例所示，每个括号（或转义括号）的每一侧都必须有空格。
+
+除了已经讨论过的图像运算符，以下图像运算符在处理图像堆栈中的图像时最有用：
+
+-clone -delete -insert -swap
+
+这些运算符的参数是按编号进入图像序列的索引，从零开始，对于第一个图像，依此类推。但是，如果给定负索引，则图像从末尾开始索引（最后添加的图像）。也就是说，索引-1是当前图像序列中的最后一个图像，-2给出倒数第二个，依此类推。
+
+输出文件名
+ImageMagick扩展了输出文件名的概念，包括：
+
+明确的图像格式
+写标准
+文件名引用
+这些扩展中的每一个都会在接下来的几段中进行解释。
+
+显式图像格式
+图像可以以多种图像格式存储，包括众所周知的JPEG，PNG，TIFF等。ImageMagick必须在写入图像之前知道所需的图像格式。ImageMagick利用文件名扩展名确定格式。例如，image.jpg告诉ImageMagick以JPEG格式写入图像。在某些情况下，文件名不能识别图像格式。在这些情况下，除非指定了明确的图像格式，否则将以原始读取的格式写入图像。例如，假设我们要将图像写入image原始的红色，绿色和蓝色强度格式的文件名：
+
+magick image.jpg rgb:image
+
+标准输出
+Unix允许将一个命令的输出传递给另一个命令。ImageMagick允许将一个命令传递给另一个文件名为的命令-。在此示例中，我们将convert的输出传递给显示程序：
+
+magick logo: gif:- | display gif:-
+
+在这里，显式格式是可选的。GIF图像格式具有唯一标识它的签名，因此ImageMagick可以轻松将格式识别为GIF。
+
+文件名引用
+（可选）使用嵌入的格式字符编写顺序图像列表。假设我们的输出文件名是image-%d.jpg并且我们的图像列表包括3张图像。您可以期望写入以下图像文件：
+
+image-0.jpg
+image-1.jpg
+image-2.jpg
+
+或检索图像属性以修改图像文件名。例如，命令
+
+magick rose: -set filename:area '%wx%h' 'rose-%[filename:area].png'
+
+用以下文件名写入图像：
+
+rose-70x46.png
+
+最后，要将多个JPEG图像转换为单独的PDF页面，请使用：
+
+magick *.jpg +adjoin page-%d.pdf
+
+流缓冲
+默认情况下，输出流被缓冲。为确保信息在写入后立即出现在目标文件或终端上，请将缓冲区大小设置为0：
+
+magick -define stream:buffer-size=0 logo: gif:- | display gif:-

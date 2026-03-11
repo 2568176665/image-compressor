@@ -312,7 +312,6 @@ class ImageCompressorApp:
         self.append_log("所有图片处理完成")
         self.status_label.config(text="所有图片处理完成")
         self.compress_button.config(state="normal")
-        messagebox.showinfo("完成", "压缩任务已完成！")
 
     def compress_single(
         self, input_file, output_dir, target_size, output_format, resize_value

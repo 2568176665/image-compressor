@@ -3,7 +3,6 @@
 /output
 /build
 /dist
-/md
 /compression.log
 /image_compressor.spec
 /nuitka-crash-report.xml
