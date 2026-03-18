@@ -6,3 +6,4 @@
 /compression.log
 /image_compressor.spec
 /nuitka-crash-report.xml
+/__pycache__
