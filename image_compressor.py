@@ -26,12 +26,12 @@ class ImageCompressorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("图片压缩工具")
-        self.root.geometry("650x500")
+        self.root.geometry("600x440")
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        self.root.grid_columnconfigure(1, weight=1)
-        self.root.grid_rowconfigure(8, weight=1)
+        self.root.grid_columnconfigure(0, weight=1)
+        self.root.grid_rowconfigure(0, weight=1)
 
         logging.basicConfig(
             filename="compression.log",
@@ -56,95 +56,119 @@ class ImageCompressorApp:
         self.start_runtime_check()
 
     def build_ui(self):
-        tk.Label(self.root, text="输入路径:").grid(
-            row=0, column=0, padx=10, pady=5, sticky="w"
-        )
-        self.input_entry = tk.Entry(self.root, textvariable=self.input_path_var)
-        self.input_entry.grid(row=0, column=1, padx=10, pady=5, sticky="ew")
-        tk.Button(self.root, text="选择文件", command=self.select_file, width=10).grid(
-            row=0, column=2, padx=2, pady=5
-        )
-        tk.Button(self.root, text="选择文件夹", command=self.select_folder, width=12).grid(
-            row=0, column=3, padx=2, pady=5
-        )
+        main_frame = tk.Frame(self.root, padx=10, pady=8)
+        main_frame.grid(row=0, column=0, sticky="nsew")
+        main_frame.grid_columnconfigure(1, weight=1)
+        main_frame.grid_columnconfigure(3, weight=1)
+        main_frame.grid_rowconfigure(7, weight=1)
 
-        tk.Label(self.root, text="输出路径:").grid(
-            row=1, column=0, padx=10, pady=5, sticky="w"
+        field_width = 18
+        button_width = 10
+        row_padding = 4
+
+        tk.Label(main_frame, text="输入路径:").grid(
+            row=0, column=0, padx=(0, 8), pady=row_padding, sticky="e"
         )
+        self.input_entry = tk.Entry(main_frame, textvariable=self.input_path_var)
+        self.input_entry.grid(row=0, column=1, pady=row_padding, sticky="ew")
 
-        output_row = tk.Frame(self.root)
-        output_row.grid(row=1, column=1, columnspan=3, padx=10, pady=5, sticky="ew")
-        output_row.grid_columnconfigure(0, weight=1)
-
-        self.output_entry = tk.Entry(output_row, textvariable=self.output_path_var)
-        self.output_entry.grid(row=0, column=0, sticky="ew")
-
-        self.auto_output_check = tk.Checkbutton(
-            output_row,
-            text="自动 output",
-            variable=self.auto_output_var,
-            command=self.update_output_path_mode,
+        input_actions = tk.Frame(main_frame)
+        input_actions.grid(
+            row=0, column=2, columnspan=2, padx=(8, 0), pady=row_padding, sticky="e"
         )
-        self.auto_output_check.grid(row=0, column=1, padx=(8, 8))
+        tk.Button(
+            input_actions, text="选择文件", command=self.select_file, width=button_width
+        ).grid(row=0, column=0, padx=(0, 6))
+        tk.Button(
+            input_actions,
+            text="选择文件夹",
+            command=self.select_folder,
+            width=button_width,
+        ).grid(row=0, column=1)
+
+        tk.Label(main_frame, text="输出路径:").grid(
+            row=1, column=0, padx=(0, 8), pady=row_padding, sticky="e"
+        )
+        self.output_entry = tk.Entry(main_frame, textvariable=self.output_path_var)
+        self.output_entry.grid(row=1, column=1, pady=row_padding, sticky="ew")
+
+        output_actions = tk.Frame(main_frame)
+        output_actions.grid(
+            row=1, column=2, columnspan=2, padx=(8, 0), pady=row_padding, sticky="e"
+        )
+        self.auto_output_button = tk.Button(
+            output_actions,
+            command=self.toggle_auto_output,
+            width=button_width,
+            relief="flat",
+            bd=0,
+            fg="white",
+            activeforeground="white",
+        )
+        self.auto_output_button.grid(row=0, column=0, padx=(0, 6))
 
         self.output_button = tk.Button(
-            output_row,
+            output_actions,
             text="选择文件夹",
             command=self.select_output_folder,
-            width=12,
+            width=button_width,
         )
-        self.output_button.grid(row=0, column=2)
+        self.output_button.grid(row=0, column=1)
 
-        tk.Label(self.root, text="目标大小 (KB):").grid(
-            row=2, column=0, padx=10, pady=5, sticky="w"
+        tk.Label(main_frame, text="目标大小 (KB):").grid(
+            row=2, column=0, padx=(0, 8), pady=row_padding, sticky="e"
         )
-        self.size_entry = tk.Entry(self.root, width=15)
-        self.size_entry.grid(row=2, column=1, padx=10, pady=5, sticky="w")
+        self.size_entry = tk.Entry(main_frame, width=field_width)
+        self.size_entry.grid(row=2, column=1, pady=row_padding, sticky="ew")
         self.size_entry.insert(0, "100")
 
-        tk.Label(self.root, text="Resize:").grid(
-            row=3, column=0, padx=10, pady=5, sticky="w"
+        tk.Label(main_frame, text="Resize:").grid(
+            row=2, column=2, padx=(12, 8), pady=row_padding, sticky="e"
         )
+        resize_group = tk.Frame(main_frame)
+        resize_group.grid(row=2, column=3, pady=row_padding, sticky="ew")
+        resize_group.grid_columnconfigure(0, weight=1)
+
         resize_combo = ttk.Combobox(
-            self.root,
+            resize_group,
             textvariable=self.resize_var,
             values=["不使用", "640x480", "800x600", "1024x768", "1280x720", "1920x1080"],
             state="readonly",
-            width=15,
+            width=field_width,
         )
-        resize_combo.grid(row=3, column=1, padx=10, pady=5, sticky="w")
+        resize_combo.grid(row=0, column=0, sticky="ew")
         resize_combo.bind("<<ComboboxSelected>>", self.on_resize_preset_selected)
 
-        size_frame = tk.Frame(self.root)
-        size_frame.grid(row=3, column=2, columnspan=2, padx=5, pady=5, sticky="w")
-        tk.Label(size_frame, text="宽").pack(side="left")
-        self.width_entry = tk.Entry(size_frame, width=8)
-        self.width_entry.pack(side="left", padx=(2, 10))
-        tk.Label(size_frame, text="高").pack(side="left")
-        self.height_entry = tk.Entry(size_frame, width=8)
-        self.height_entry.pack(side="left", padx=2)
+        size_frame = tk.Frame(resize_group)
+        size_frame.grid(row=1, column=0, pady=(4, 0), sticky="w")
+        tk.Label(size_frame, text="宽").grid(row=0, column=0, sticky="w")
+        self.width_entry = tk.Entry(size_frame, width=6)
+        self.width_entry.grid(row=0, column=1, padx=(4, 10))
+        tk.Label(size_frame, text="高").grid(row=0, column=2, sticky="w")
+        self.height_entry = tk.Entry(size_frame, width=6)
+        self.height_entry.grid(row=0, column=3, padx=(4, 0))
 
-        tk.Label(self.root, text="输出格式:").grid(
-            row=4, column=0, padx=10, pady=5, sticky="w"
+        tk.Label(main_frame, text="输出格式:").grid(
+            row=3, column=0, padx=(0, 8), pady=row_padding, sticky="e"
         )
         format_combo = ttk.Combobox(
-            self.root,
+            main_frame,
             textvariable=self.format_var,
             values=["jpg", "png", "webp"],
             state="readonly",
-            width=15,
+            width=field_width,
         )
-        format_combo.grid(row=4, column=1, padx=10, pady=5, sticky="w")
+        format_combo.grid(row=3, column=1, pady=row_padding, sticky="ew")
 
-        tk.Label(self.root, text="最大线程数:").grid(
-            row=4, column=2, padx=10, pady=5, sticky="w"
+        tk.Label(main_frame, text="最大线程数:").grid(
+            row=3, column=2, padx=(12, 8), pady=row_padding, sticky="e"
         )
-        self.max_workers_entry = tk.Entry(self.root, width=10)
-        self.max_workers_entry.grid(row=4, column=3, padx=10, pady=5, sticky="w")
+        self.max_workers_entry = tk.Entry(main_frame, width=field_width)
+        self.max_workers_entry.grid(row=3, column=3, pady=row_padding, sticky="ew")
         self.max_workers_entry.insert(0, "0")
 
         self.compress_button = tk.Button(
-            self.root,
+            main_frame,
             text="开始压缩",
             command=self.start_compression,
             bg="#4CAF50",
@@ -152,19 +176,20 @@ class ImageCompressorApp:
             height=2,
         )
         self.compress_button.grid(
-            row=5, column=0, columnspan=4, pady=15, sticky="ew", padx=10
+            row=4, column=0, columnspan=4, pady=(10, 8), sticky="ew"
         )
 
         self.progress = ttk.Progressbar(
-            self.root, orient="horizontal", mode="determinate"
+            main_frame, orient="horizontal", mode="determinate"
         )
-        self.progress.grid(row=6, column=0, columnspan=4, padx=10, pady=5, sticky="ew")
+        self.progress.grid(row=5, column=0, columnspan=4, pady=(0, 8), sticky="ew")
 
-        tk.Label(self.root, text="日志:").grid(row=7, column=0, padx=10, pady=5, sticky="nw")
-        self.log_text = tk.Text(self.root, height=8, state="disabled", wrap="word")
-        self.log_text.grid(
-            row=8, column=0, columnspan=4, padx=10, pady=5, sticky="nsew"
+        tk.Label(main_frame, text="日志:").grid(
+            row=6, column=0, padx=(0, 8), pady=(2, 4), sticky="nw"
         )
+        self.log_text = tk.Text(main_frame, height=6, state="disabled", wrap="word")
+        self.log_text.grid(row=7, column=0, columnspan=4, sticky="nsew")
+        self.refresh_auto_output_button()
 
     def bind_events(self):
         self.input_path_var.trace_add("write", self.on_input_path_changed)
@@ -181,6 +206,25 @@ class ImageCompressorApp:
         else:
             self.output_entry.config(state="normal")
             self.output_button.config(state="normal")
+        self.refresh_auto_output_button()
+
+    def toggle_auto_output(self):
+        self.auto_output_var.set(not self.auto_output_var.get())
+        self.update_output_path_mode()
+
+    def refresh_auto_output_button(self):
+        if self.auto_output_var.get():
+            self.auto_output_button.config(
+                text="自动输出",
+                bg="#43A047",
+                activebackground="#388E3C",
+            )
+        else:
+            self.auto_output_button.config(
+                text="手动输出",
+                bg="#78909C",
+                activebackground="#607D8B",
+            )
 
     def sync_output_path(self):
         self.output_path_var.set(self.derive_output_path(self.input_path_var.get()))
@@ -214,7 +258,7 @@ class ImageCompressorApp:
 
     def on_resize_preset_selected(self, _event):
         preset = self.resize_var.get()
-        if preset != "不使用":
+        if "x" in preset:
             width, height = preset.split("x")
             self.width_entry.delete(0, tk.END)
             self.width_entry.insert(0, width)
@@ -320,9 +364,7 @@ class ImageCompressorApp:
         self.is_runtime_ready = False
         self.compress_button.config(state="disabled")
 
-        if existing_path:
-            self.append_log("已找到可用的 ImageMagick，后台检查更新中。")
-        else:
+        if not existing_path:
             self.append_log("未检测到可用的 ImageMagick，开始后台准备依赖。")
 
         threading.Thread(target=self.run_runtime_check, daemon=True).start()
