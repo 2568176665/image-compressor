@@ -7,6 +7,8 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+from imagemagick_manager import EnsureResult, ImageMagickManager
+
 
 IMAGE_PATTERNS = (
     "*.jpg",
@@ -29,7 +31,7 @@ class ImageCompressorApp:
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.root.grid_columnconfigure(1, weight=1)
-        self.root.grid_rowconfigure(9, weight=1)
+        self.root.grid_rowconfigure(10, weight=1)
 
         logging.basicConfig(
             filename="compression.log",
@@ -43,11 +45,16 @@ class ImageCompressorApp:
         self.output_path_var = tk.StringVar()
         self.resize_var = tk.StringVar(value="不使用")
         self.format_var = tk.StringVar(value="jpg")
+        self.runtime_status_var = tk.StringVar(value="正在检查 ImageMagick...")
         self.is_compressing = False
+        self.is_runtime_ready = False
+        self.magick_path = None
+        self.imagemagick_manager = ImageMagickManager()
 
         self.build_ui()
         self.bind_events()
         self.update_output_path_mode()
+        self.start_runtime_check()
 
     def build_ui(self):
         tk.Label(self.root, text="输入路径:").grid(
@@ -154,13 +161,21 @@ class ImageCompressorApp:
         )
         self.progress.grid(row=6, column=0, columnspan=4, padx=10, pady=5, sticky="ew")
 
-        self.status_label = tk.Label(self.root, text="准备就绪")
-        self.status_label.grid(row=7, column=0, columnspan=4, padx=10, pady=5)
+        self.runtime_label = tk.Label(
+            self.root,
+            textvariable=self.runtime_status_var,
+            anchor="w",
+            fg="#555555",
+        )
+        self.runtime_label.grid(row=7, column=0, columnspan=4, padx=10, pady=(5, 0), sticky="ew")
 
-        tk.Label(self.root, text="日志:").grid(row=8, column=0, padx=10, pady=5, sticky="nw")
+        self.status_label = tk.Label(self.root, text="准备就绪")
+        self.status_label.grid(row=8, column=0, columnspan=4, padx=10, pady=5)
+
+        tk.Label(self.root, text="日志:").grid(row=9, column=0, padx=10, pady=5, sticky="nw")
         self.log_text = tk.Text(self.root, height=8, state="disabled", wrap="word")
         self.log_text.grid(
-            row=9, column=0, columnspan=4, padx=10, pady=5, sticky="nsew"
+            row=10, column=0, columnspan=4, padx=10, pady=5, sticky="nsew"
         )
 
     def bind_events(self):
@@ -239,6 +254,10 @@ class ImageCompressorApp:
             self.output_path_var.set(folder_path)
 
     def start_compression(self):
+        if not self.is_runtime_ready or not self.magick_path:
+            messagebox.showwarning("提示", "ImageMagick 尚未准备完成，请稍后再试。")
+            return
+
         logging.info("开始压缩任务")
         self.append_log("开始压缩任务")
         input_path = self.input_entry.get().strip()
@@ -308,6 +327,64 @@ class ImageCompressorApp:
 
         return None
 
+    def start_runtime_check(self):
+        existing_path = self.imagemagick_manager.get_magick_path()
+        self.magick_path = None
+        self.is_runtime_ready = False
+        self.compress_button.config(state="disabled")
+        self.status_label.config(text="正在检查 ImageMagick...")
+
+        if existing_path:
+            self.runtime_status_var.set("ImageMagick 可用，正在后台检查更新...")
+            self.append_log("已找到可用的 ImageMagick，后台检查更新中。")
+        else:
+            self.runtime_status_var.set("未检测到 ImageMagick，正在后台下载...")
+            self.append_log("未检测到可用的 ImageMagick，开始后台准备依赖。")
+
+        threading.Thread(target=self.run_runtime_check, daemon=True).start()
+
+    def run_runtime_check(self):
+        try:
+            result = self.imagemagick_manager.ensure_imagemagick_ready(
+                status_callback=self.handle_runtime_status,
+            )
+        except Exception as error:  # pragma: no cover - defensive fallback
+            fallback_path = self.imagemagick_manager.get_magick_path()
+            result = EnsureResult(
+                magick_path=fallback_path,
+                version=None,
+                source="unknown" if fallback_path else "none",
+                updated=False,
+                ready=fallback_path is not None,
+                message=f"准备 ImageMagick 时出现未处理错误: {error}",
+                fatal=fallback_path is None,
+            )
+        self.root.after(0, self.finish_runtime_check, result)
+
+    def handle_runtime_status(self, message):
+        self.root.after(0, self.update_runtime_status, message)
+
+    def update_runtime_status(self, message):
+        self.runtime_status_var.set(message)
+        logging.info(message)
+        self.append_log(message)
+
+    def finish_runtime_check(self, result):
+        self.magick_path = result.magick_path
+        self.is_runtime_ready = result.ready and result.magick_path is not None
+        self.runtime_status_var.set(result.message)
+        self.append_log(result.message)
+
+        if self.is_runtime_ready and not self.is_compressing:
+            self.compress_button.config(state="normal")
+            self.status_label.config(text="准备就绪")
+        else:
+            self.compress_button.config(state="disabled")
+            self.status_label.config(text="ImageMagick 不可用")
+
+        if result.fatal:
+            messagebox.showerror("错误", result.message)
+
     def run_tasks(
         self,
         image_files,
@@ -359,7 +436,7 @@ class ImageCompressorApp:
         logging.info("所有图片处理完成")
         self.append_log("所有图片处理完成")
         self.status_label.config(text="所有图片处理完成")
-        self.compress_button.config(state="normal")
+        self.compress_button.config(state="normal" if self.is_runtime_ready else "disabled")
 
     def on_close(self):
         if self.is_compressing:
@@ -375,10 +452,12 @@ class ImageCompressorApp:
         logging.info("开始压缩文件: %s", input_file)
         base_name = os.path.splitext(os.path.basename(input_file))[0]
         output_file = os.path.join(output_dir, f"{base_name}.{output_format}")
-        magick_path = os.path.join("ImageMagick", "magick.exe")
-
-        if not os.path.exists(magick_path):
-            magick_path = "magick"
+        magick_path = self.magick_path or self.imagemagick_manager.get_magick_path()
+        if not magick_path:
+            warning_message = "ImageMagick 不可用，无法执行压缩。"
+            logging.error(warning_message)
+            self.root.after(0, self.append_log, warning_message)
+            return f"失败: {base_name} (缺少 ImageMagick)"
 
         if output_format in ["jpg", "jpeg"]:
             target_kb = target_size // 1024

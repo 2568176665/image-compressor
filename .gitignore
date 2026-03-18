@@ -7,3 +7,5 @@
 /image_compressor.spec
 /nuitka-crash-report.xml
 /__pycache__
+/.imagemagick_update.lock
+/ImageMagickRuntime
