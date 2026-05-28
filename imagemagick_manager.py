@@ -20,9 +20,18 @@ except ImportError:  # pragma: no cover - optional runtime dependency
 
 
 ARCHIVE_INDEX_URL = "https://imagemagick.org/archive/binaries/"
+PINNED_IMAGEMAGICK_VERSION = "7.1.2-23"
+GITHUB_RELEASE_ASSETS_URL_TEMPLATE = (
+    "https://github.com/ImageMagick/ImageMagick/releases/expanded_assets/{version}"
+)
 VERSION_PATTERN = re.compile(r"ImageMagick (\d+\.\d+\.\d+-\d+)")
 PACKAGE_PATTERN = re.compile(
     r'href="(ImageMagick-(7\.\d+\.\d+-\d+)-portable-Q16(?:-HDRI)?-(arm64|x64|x86)\.7z)"',
+    re.IGNORECASE,
+)
+GITHUB_PACKAGE_PATTERN = re.compile(
+    r'href="(/ImageMagick/ImageMagick/releases/download/[^"/]+/'
+    r'(ImageMagick-(7\.\d+\.\d+-\d+)-portable-Q16(?:-HDRI)?-(arm64|x64|x86)\.7z))"',
     re.IGNORECASE,
 )
 
@@ -110,31 +119,31 @@ class ImageMagickManager:
         status_callback: StatusCallback | None,
     ) -> EnsureResult:
         try:
-            remote = self._fetch_latest_package()
+            remote = self._fetch_pinned_package()
         except Exception as error:
             return self._failure_result(f"检查更新失败: {error}")
 
         local_version = (local or {}).get("version")
-        if local and local_version and self._compare_versions(local_version, remote["version"]) >= 0:
+        if local and local_version and local_version == remote["version"]:
             return EnsureResult(
                 magick_path=local["path"],
                 version=local_version,
                 source=local["source"],
                 updated=False,
                 ready=True,
-                message=f"ImageMagick 已是最新版本 {local_version}",
+                message=f"ImageMagick 已使用固定版本 {local_version}",
                 fatal=False,
             )
 
         if local and not local_version:
-            self._emit(status_callback, "本地版本未知，准备拉取最新版本...")
+            self._emit(status_callback, f"本地版本未知，准备切换到固定版本 {remote['version']} ...")
         elif local_version:
             self._emit(
                 status_callback,
-                f"发现新版本 {remote['version']}，当前版本 {local_version}，开始下载...",
+                f"当前版本 {local_version}，准备切换到固定版本 {remote['version']} ...",
             )
         else:
-            self._emit(status_callback, f"开始下载 ImageMagick {remote['version']} ...")
+            self._emit(status_callback, f"开始下载固定版本 ImageMagick {remote['version']} ...")
 
         archive_path = None
         try:
@@ -170,7 +179,29 @@ class ImageMagickManager:
             fatal=False,
         )
 
-    def _fetch_latest_package(self) -> dict:
+    def _fetch_pinned_package(self) -> dict:
+        architecture = self._get_architecture()
+        candidates: list[dict] = []
+        errors: list[str] = []
+        try:
+            candidates = self._fetch_candidates_from_archive(architecture)
+        except Exception as error:
+            errors.append(f"archive: {error}")
+        if not candidates:
+            try:
+                candidates = self._fetch_candidates_from_github_release(architecture)
+            except Exception as error:
+                errors.append(f"github: {error}")
+        if not candidates:
+            detail = f"（{'; '.join(errors)}）" if errors else ""
+            raise RuntimeError(
+                f"未找到固定版本 ImageMagick {PINNED_IMAGEMAGICK_VERSION} 的便携包{detail}"
+            )
+
+        candidates.sort(key=lambda item: ("-HDRI-" in item["filename"], item["filename"]))
+        return candidates[0]
+
+    def _fetch_candidates_from_archive(self, architecture: str) -> list[dict]:
         request = urllib.request.Request(
             ARCHIVE_INDEX_URL,
             headers={"User-Agent": "ImageC/1.0"},
@@ -178,10 +209,9 @@ class ImageMagickManager:
         with urllib.request.urlopen(request, timeout=8) as response:
             html = response.read().decode("utf-8", errors="ignore")
 
-        architecture = self._get_architecture()
         candidates = []
         for filename, version, arch in PACKAGE_PATTERN.findall(html):
-            if arch != architecture:
+            if version != PINNED_IMAGEMAGICK_VERSION or arch != architecture:
                 continue
             candidates.append(
                 {
@@ -193,7 +223,7 @@ class ImageMagickManager:
 
         if not candidates and architecture != "x64":
             for filename, version, arch in PACKAGE_PATTERN.findall(html):
-                if arch == "x64":
+                if version == PINNED_IMAGEMAGICK_VERSION and arch == "x64":
                     candidates.append(
                         {
                             "filename": filename,
@@ -201,12 +231,39 @@ class ImageMagickManager:
                             "url": urllib.parse.urljoin(ARCHIVE_INDEX_URL, filename),
                         }
                     )
+        return candidates
 
-        if not candidates:
-            raise RuntimeError("未找到适用于当前系统的 ImageMagick 7.x 便携包")
+    def _fetch_candidates_from_github_release(self, architecture: str) -> list[dict]:
+        request = urllib.request.Request(
+            GITHUB_RELEASE_ASSETS_URL_TEMPLATE.format(version=PINNED_IMAGEMAGICK_VERSION),
+            headers={"User-Agent": "ImageC/1.0"},
+        )
+        with urllib.request.urlopen(request, timeout=8) as response:
+            html = response.read().decode("utf-8", errors="ignore")
 
-        candidates.sort(key=lambda item: self._version_key(item["version"]), reverse=True)
-        return candidates[0]
+        candidates = []
+        for href, filename, version, arch in GITHUB_PACKAGE_PATTERN.findall(html):
+            if version != PINNED_IMAGEMAGICK_VERSION or arch != architecture:
+                continue
+            candidates.append(
+                {
+                    "filename": filename,
+                    "version": version,
+                    "url": urllib.parse.urljoin("https://github.com", href),
+                }
+            )
+
+        if not candidates and architecture != "x64":
+            for href, filename, version, arch in GITHUB_PACKAGE_PATTERN.findall(html):
+                if version == PINNED_IMAGEMAGICK_VERSION and arch == "x64":
+                    candidates.append(
+                        {
+                            "filename": filename,
+                            "version": version,
+                            "url": urllib.parse.urljoin("https://github.com", href),
+                        }
+                    )
+        return candidates
 
     def _download_package(
         self,

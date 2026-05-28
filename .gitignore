@@ -1,12 +1,27 @@
-/.venv
-/input
-/output
-/build
-/dist
-/compression.log
-/image_compressor.spec
+# Python
+/.venv/
+/__pycache__/
+*.py[cod]
+
+# Build outputs
+/build/
+/dist/
 /nuitka-crash-report.xml
-/__pycache__
+/image_compressor.spec
+
+# Runtime files
+/input/
+/output/
+/compression.log
 /.imagemagick_update.lock
-/ImageMagickRuntime
-/ImageMagick
+
+# ImageMagick runtime
+/ImageMagick/
+/ImageMagickRuntime/
+/ImageMagick.staging/
+/ImageMagick.backup/
+
+# Local tooling / workspace
+/.codegraph/
+/.python-version
+/uv.lock
