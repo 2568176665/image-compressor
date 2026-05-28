@@ -160,7 +160,14 @@ def build(root: Path, onedir: bool) -> None:
 
     print("[build] Running:")
     print("        " + " ".join(cmd))
-    subprocess.run(cmd, cwd=root, check=True)
+    try:
+        subprocess.run(cmd, cwd=root, check=True)
+    except subprocess.CalledProcessError:
+        print("[build] Build failed. Cleaning non-dist artifacts...")
+        _clean_build_artifacts(root, onedir)
+        raise
+
+    _clean_build_artifacts(root, onedir)
 
     if onedir:
         output_path = root / "dist" / APP_NAME
@@ -168,6 +175,25 @@ def build(root: Path, onedir: bool) -> None:
         output_path = root / "dist" / f"{APP_NAME}.exe"
 
     print(f"[build] Build success: {output_path}")
+
+
+def _clean_build_artifacts(root: Path, onedir: bool) -> None:
+    for name in ("build", "__pycache__"):
+        path = root / name
+        if path.exists():
+            remove_path(path)
+            print(f"[build] Removed: {name}")
+
+    for spec in root.glob("*.spec"):
+        remove_path(spec)
+        print(f"[build] Removed: {spec.name}")
+
+    dist_dir = root / "dist"
+    if not onedir and dist_dir.exists():
+        for item in dist_dir.iterdir():
+            if item.is_dir():
+                remove_path(item)
+                print(f"[build] Removed: dist/{item.name}")
 
 
 def main() -> int:
