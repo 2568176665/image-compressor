@@ -84,12 +84,15 @@ class ImageMagickManager:
             )
 
         local = self.get_local_install()
-        if local is None:
-            self._emit(status_callback, "未检测到本地 ImageMagick，准备下载...")
-        else:
-            self._emit(
-                status_callback,
-                f"检测到 ImageMagick {local['version'] or '未知版本'}，检查更新中...",
+        if local and local["version"] == PINNED_IMAGEMAGICK_VERSION:
+            return EnsureResult(
+                magick_path=local["path"],
+                version=local["version"],
+                source=local["source"],
+                updated=False,
+                ready=True,
+                message=f"ImageMagick {local['version']} 已就绪",
+                fatal=False,
             )
 
         try:
@@ -103,13 +106,13 @@ class ImageMagickManager:
             return self._result_from_runtime(
                 self._get_available_runtime(),
                 updated=False,
-                message="另一个实例正在更新 ImageMagick，当前继续使用现有版本。",
+                message="另一个实例正在准备 ImageMagick，当前继续使用现有版本。",
             )
 
         try:
             return self._ensure_imagemagick_ready_locked(local, status_callback)
         except Exception as error:  # pragma: no cover - defensive fallback
-            return self._failure_result(f"更新 ImageMagick 失败: {error}")
+            return self._failure_result(f"准备 ImageMagick 失败: {error}")
         finally:
             self._release_lock()
 
@@ -121,7 +124,7 @@ class ImageMagickManager:
         try:
             remote = self._fetch_pinned_package()
         except Exception as error:
-            return self._failure_result(f"检查更新失败: {error}")
+            return self._failure_result(f"获取版本信息失败: {error}")
 
         local_version = (local or {}).get("version")
         if local and local_version and local_version == remote["version"]:

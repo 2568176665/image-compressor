@@ -30,8 +30,8 @@
 
 ## 文件
 
-- [image_compressor.py](/d:/Code/ImageC/image_compressor.py)：主界面与压缩流程
-- [imagemagick_manager.py](/d:/Code/ImageC/imagemagick_manager.py)：ImageMagick 检查、下载与更新逻辑
+- [image_compressor.py](image_compressor.py)：主界面与压缩流程
+- [imagemagick_manager.py](imagemagick_manager.py)：ImageMagick 检查、下载与更新逻辑
 
 ## 说明
 

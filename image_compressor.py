@@ -394,15 +394,11 @@ class ImageCompressorApp:
     def finish_runtime_check(self, result):
         self.magick_path = result.magick_path
         self.is_runtime_ready = result.ready and result.magick_path is not None
-        self.append_log(result.message)
 
         if self.is_runtime_ready and not self.is_compressing:
             self.compress_button.config(state="normal")
         else:
             self.compress_button.config(state="disabled")
-
-        if result.fatal:
-            messagebox.showerror("错误", result.message)
 
     def run_tasks(
         self,
