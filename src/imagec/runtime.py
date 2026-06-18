@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import platform
 import re
@@ -31,7 +33,6 @@ GITHUB_PACKAGE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-
 StatusCallback = Callable[[str], None]
 
 
@@ -46,6 +47,21 @@ class EnsureResult:
     fatal: bool = False
 
 
+@dataclass(slots=True)
+class RuntimeSummary:
+    level: str
+    message: str
+    can_start: bool
+
+
+def summarize_runtime_result(result: EnsureResult) -> RuntimeSummary:
+    if result.fatal or not result.ready or not result.magick_path:
+        return RuntimeSummary(level="error", message=result.message, can_start=False)
+    if result.source != "private" or not result.updated:
+        return RuntimeSummary(level="warning", message=result.message, can_start=True)
+    return RuntimeSummary(level="info", message=result.message, can_start=True)
+
+
 class ImageMagickManager:
     def __init__(self, base_dir: str | None = None):
         self.base_dir = Path(base_dir or self._get_base_dir())
@@ -57,7 +73,7 @@ class ImageMagickManager:
     def _get_base_dir(self) -> str:
         if getattr(sys, "frozen", False):
             return os.path.dirname(sys.executable)
-        return os.path.dirname(os.path.abspath(__file__))
+        return str(Path(__file__).resolve().parents[2])
 
     def get_magick_path(self) -> str | None:
         runtime = self._get_available_runtime()
@@ -75,9 +91,7 @@ class ImageMagickManager:
         try:
             self._repair_install_dirs()
         except Exception as error:
-            return self._failure_result(
-                f"修复本地 ImageMagick 目录失败: {error}",
-            )
+            return self._failure_result(f"修复本地 ImageMagick 目录失败: {error}")
 
         local = self.get_local_install()
         if local and local["version"] == PINNED_IMAGEMAGICK_VERSION:
@@ -94,9 +108,7 @@ class ImageMagickManager:
         try:
             lock_acquired = self._acquire_lock(local_available=local is not None)
         except Exception as error:
-            return self._failure_result(
-                f"创建 ImageMagick 更新锁失败: {error}",
-            )
+            return self._failure_result(f"创建 ImageMagick 更新锁失败: {error}")
 
         if not lock_acquired:
             return self._result_from_runtime(
@@ -107,7 +119,7 @@ class ImageMagickManager:
 
         try:
             return self._ensure_imagemagick_ready_locked(local, status_callback)
-        except Exception as error:  # pragma: no cover - defensive fallback
+        except Exception as error:  # pragma: no cover
             return self._failure_result(f"准备 ImageMagick 失败: {error}")
         finally:
             self._release_lock()
@@ -151,11 +163,7 @@ class ImageMagickManager:
                 remote["filename"],
                 status_callback,
             )
-            staged_dir = self._stage_package(
-                archive_path,
-                remote["version"],
-                status_callback,
-            )
+            staged_dir = self._stage_package(archive_path, remote["version"], status_callback)
             install_dir = self._activate_staged_install(
                 staged_dir,
                 remote["version"],
@@ -201,10 +209,7 @@ class ImageMagickManager:
         return candidates[0]
 
     def _fetch_candidates_from_archive(self, architecture: str) -> list[dict]:
-        request = urllib.request.Request(
-            ARCHIVE_INDEX_URL,
-            headers={"User-Agent": "ImageC/1.0"},
-        )
+        request = urllib.request.Request(ARCHIVE_INDEX_URL, headers={"User-Agent": "ImageC/1.0"})
         with urllib.request.urlopen(request, timeout=8) as response:
             html = response.read().decode("utf-8", errors="ignore")
 
@@ -275,7 +280,7 @@ class ImageMagickManager:
         target_path = temp_dir / filename
         request = urllib.request.Request(url, headers={"User-Agent": "ImageC/1.0"})
 
-        with urllib.request.urlopen(request, timeout=30) as response, open(target_path, "wb") as file_obj:
+        with urllib.request.urlopen(request, timeout=30) as response, target_path.open("wb") as file_obj:
             total = int(response.headers.get("Content-Length", "0") or "0")
             downloaded = 0
             last_report = 0.0
@@ -403,9 +408,7 @@ class ImageMagickManager:
                 self._restore_backup_install()
 
     def _restore_backup_install(self) -> None:
-        if not self.backup_dir.exists():
-            return
-        if self.install_dir.exists():
+        if not self.backup_dir.exists() or self.install_dir.exists():
             return
         self.backup_dir.rename(self.install_dir)
 
@@ -432,12 +435,7 @@ class ImageMagickManager:
             fatal=True,
         )
 
-    def _result_from_runtime(
-        self,
-        runtime: dict | None,
-        updated: bool,
-        message: str,
-    ) -> EnsureResult:
+    def _result_from_runtime(self, runtime: dict | None, updated: bool, message: str) -> EnsureResult:
         if runtime:
             return EnsureResult(
                 magick_path=runtime["path"],
@@ -519,9 +517,7 @@ class ImageMagickManager:
     def _release_lock(self) -> None:
         try:
             self.lock_file.unlink()
-        except FileNotFoundError:
-            return
-        except OSError:
+        except (FileNotFoundError, OSError):
             return
 
     def _cleanup_path(self, path: Path) -> None:
@@ -534,9 +530,7 @@ class ImageMagickManager:
     def _cleanup_path_if_exists(self, path: Path) -> None:
         try:
             self._cleanup_path(path)
-        except FileNotFoundError:
-            return
-        except OSError:
+        except (FileNotFoundError, OSError):
             return
 
     def _cleanup_file(self, file_path: Path) -> None:

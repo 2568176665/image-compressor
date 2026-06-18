@@ -1,15 +1,21 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
+import tomllib
 from pathlib import Path
 
+
 PROJECT_ROOT = Path(__file__).resolve().parent
-ENTRY_SCRIPT = PROJECT_ROOT / "image_compressor.py"
+ENTRY_SCRIPT = PROJECT_ROOT / "main.py"
+SRC_DIR = PROJECT_ROOT / "src"
 APP_NAME = "image_compressor"
+ICON_FILE = PROJECT_ROOT / "assets" / "app.ico"
 
 EXCLUDED_SCAN_DIRS = {
     ".git",
@@ -109,7 +115,14 @@ def remove_path(path: Path) -> bool:
 
     try:
         if path.is_dir():
-            shutil.rmtree(path)
+            for attempt in range(2):
+                try:
+                    shutil.rmtree(path)
+                    break
+                except OSError:
+                    if attempt == 1:
+                        raise
+                    time.sleep(0.1)
         else:
             path.unlink()
     except OSError as error:
@@ -139,7 +152,11 @@ def clean(root: Path) -> int:
 def build(root: Path, onedir: bool) -> None:
     if not ENTRY_SCRIPT.exists():
         raise FileNotFoundError(f"Entry script not found: {ENTRY_SCRIPT}")
+    if not SRC_DIR.exists():
+        raise FileNotFoundError(f"Source directory not found: {SRC_DIR}")
 
+    version = read_project_version()
+    version_file = write_version_file(version)
     cmd = [
         sys.executable,
         "-m",
@@ -149,6 +166,10 @@ def build(root: Path, onedir: bool) -> None:
         "--windowed",
         "--name",
         APP_NAME,
+        "--paths",
+        str(SRC_DIR),
+        "--version-file",
+        str(version_file),
     ]
 
     if onedir:
@@ -156,16 +177,25 @@ def build(root: Path, onedir: bool) -> None:
     else:
         cmd.append("--onefile")
 
+    if ICON_FILE.exists():
+        cmd.extend(["--icon", str(ICON_FILE)])
+    else:
+        print(f"[build] Icon not found, skip: {ICON_FILE}")
+
     cmd.append(str(ENTRY_SCRIPT))
 
+    print(f"[build] Version: {version}")
     print("[build] Running:")
     print("        " + " ".join(cmd))
     try:
         subprocess.run(cmd, cwd=root, check=True)
     except subprocess.CalledProcessError:
         print("[build] Build failed. Cleaning non-dist artifacts...")
+        print(f"[build] Diagnostics: entry={ENTRY_SCRIPT}, src={SRC_DIR}, icon_exists={ICON_FILE.exists()}")
         _clean_build_artifacts(root, onedir)
         raise
+    finally:
+        remove_path(version_file)
 
     _clean_build_artifacts(root, onedir)
 
@@ -174,6 +204,7 @@ def build(root: Path, onedir: bool) -> None:
     else:
         output_path = root / "dist" / f"{APP_NAME}.exe"
 
+    validate_build_output(output_path, onedir)
     print(f"[build] Build success: {output_path}")
 
 
@@ -194,6 +225,66 @@ def _clean_build_artifacts(root: Path, onedir: bool) -> None:
             if item.is_dir():
                 remove_path(item)
                 print(f"[build] Removed: dist/{item.name}")
+
+
+def read_project_version() -> str:
+    with (PROJECT_ROOT / "pyproject.toml").open("rb") as file_obj:
+        data = tomllib.load(file_obj)
+    return data["project"]["version"]
+
+
+def write_version_file(version: str) -> Path:
+    major, minor, patch = parse_version_parts(version)
+    content = f"""VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=({major}, {minor}, {patch}, 0),
+    prodvers=({major}, {minor}, {patch}, 0),
+    mask=0x3F,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable(
+        '040904B0',
+        [
+          StringStruct('CompanyName', 'ImageC'),
+          StringStruct('FileDescription', 'ImageC image compressor'),
+          StringStruct('FileVersion', '{version}'),
+          StringStruct('InternalName', '{APP_NAME}'),
+          StringStruct('OriginalFilename', '{APP_NAME}.exe'),
+          StringStruct('ProductName', 'ImageC'),
+          StringStruct('ProductVersion', '{version}')
+        ]
+      )
+    ]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])
+  ]
+)"""
+    target = Path(tempfile.gettempdir()) / f"{APP_NAME}-version-info.txt"
+    target.write_text(content, encoding="utf-8")
+    return target
+
+
+def parse_version_parts(version: str) -> tuple[int, int, int]:
+    parts = [int(part) for part in version.split(".")[:3]]
+    while len(parts) < 3:
+        parts.append(0)
+    return parts[0], parts[1], parts[2]
+
+
+def validate_build_output(output_path: Path, onedir: bool) -> None:
+    if not output_path.exists():
+        raise FileNotFoundError(f"Build output missing: {output_path}")
+    if onedir:
+        executable = output_path / f"{APP_NAME}.exe"
+        if not executable.exists():
+            raise FileNotFoundError(f"Onedir executable missing: {executable}")
+    elif output_path.suffix.lower() != ".exe":
+        raise RuntimeError(f"Unexpected build artifact: {output_path}")
 
 
 def main() -> int:
