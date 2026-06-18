@@ -1,8 +1,10 @@
 import concurrent.futures
 import glob
+import json
 import logging
 import os
 import subprocess
+import sys
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -50,8 +52,22 @@ class ImageCompressorApp:
         self.magick_path = None
         self.imagemagick_manager = ImageMagickManager()
 
+        self._config_path = self._resolve_config_path()
+        self._config_defaults = {
+            "input_path": os.path.join(".", "input"),
+            "auto_output": True,
+            "output_path": "",
+            "target_size_kb": "100",
+            "resize": "不使用",
+            "resize_width": "",
+            "resize_height": "",
+            "format": "jpg",
+            "max_workers": "0",
+        }
+
         self.build_ui()
         self.bind_events()
+        self.load_config()
         self.update_output_path_mode()
         self.start_runtime_check()
 
@@ -458,7 +474,61 @@ class ImageCompressorApp:
                 "提示", "正在压缩图片，请等待任务完成后再关闭窗口。"
             )
             return
+        self.save_config()
         self.root.destroy()
+
+    def _resolve_config_path(self):
+        if getattr(sys, "frozen", False):
+            base = os.path.dirname(sys.executable)
+        else:
+            base = os.path.dirname(os.path.abspath(__file__))
+        return os.path.join(base, "config.json")
+
+    def load_config(self):
+        if not os.path.exists(self._config_path):
+            self.save_config()
+            return
+        try:
+            with open(self._config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return
+
+        self.input_path_var.set(cfg.get("input_path", self._config_defaults["input_path"]))
+        self.auto_output_var.set(cfg.get("auto_output", self._config_defaults["auto_output"]))
+        self.output_path_var.set(cfg.get("output_path", self._config_defaults["output_path"]))
+        self.format_var.set(cfg.get("format", self._config_defaults["format"]))
+        self.resize_var.set(cfg.get("resize", self._config_defaults["resize"]))
+
+        self.size_entry.delete(0, tk.END)
+        self.size_entry.insert(0, cfg.get("target_size_kb", self._config_defaults["target_size_kb"]))
+
+        self.width_entry.delete(0, tk.END)
+        self.width_entry.insert(0, cfg.get("resize_width", self._config_defaults["resize_width"]))
+
+        self.height_entry.delete(0, tk.END)
+        self.height_entry.insert(0, cfg.get("resize_height", self._config_defaults["resize_height"]))
+
+        self.max_workers_entry.delete(0, tk.END)
+        self.max_workers_entry.insert(0, cfg.get("max_workers", self._config_defaults["max_workers"]))
+
+    def save_config(self):
+        cfg = {
+            "input_path": self.input_path_var.get(),
+            "auto_output": self.auto_output_var.get(),
+            "output_path": self.output_path_var.get(),
+            "target_size_kb": self.size_entry.get(),
+            "resize": self.resize_var.get(),
+            "resize_width": self.width_entry.get(),
+            "resize_height": self.height_entry.get(),
+            "format": self.format_var.get(),
+            "max_workers": self.max_workers_entry.get(),
+        }
+        try:
+            with open(self._config_path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False, indent=2)
+        except OSError:
+            pass
 
     def compress_single(
         self, input_file, output_dir, target_size, output_format, resize_value

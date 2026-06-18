@@ -14,6 +14,7 @@
 /output/
 /compression.log
 /.imagemagick_update.lock
+config.json
 
 # ImageMagick runtime
 /ImageMagick/
@@ -23,5 +24,5 @@
 
 # Local tooling / workspace
 /.codegraph/
-/.python-version
-/uv.lock
+.python-version
+uv.lock

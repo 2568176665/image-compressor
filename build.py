@@ -59,9 +59,9 @@ def parse_args() -> argparse.Namespace:
         help="Skip cleanup before build.",
     )
     parser.add_argument(
-        "--onedir",
+        "--onefile",
         action="store_true",
-        help="Build in one-dir mode. Default is one-file mode.",
+        help="Build in one-file mode. Default is one-dir mode.",
     )
     return parser.parse_args()
 
@@ -205,7 +205,7 @@ def main() -> int:
     if args.clean_only:
         return 0
 
-    build(PROJECT_ROOT, onedir=args.onedir)
+    build(PROJECT_ROOT, onedir=not args.onefile)
     return 0
 
 
