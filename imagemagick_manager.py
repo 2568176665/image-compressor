@@ -1,4 +1,3 @@
-import hashlib
 import os
 import platform
 import re
@@ -13,10 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-try:
-    import py7zr
-except ImportError:  # pragma: no cover - optional runtime dependency
-    py7zr = None
+import py7zr
 
 
 ARCHIVE_INDEX_URL = "https://imagemagick.org/archive/binaries/"
@@ -150,7 +146,7 @@ class ImageMagickManager:
 
         archive_path = None
         try:
-            archive_path, _digest = self._download_package(
+            archive_path = self._download_package(
                 remote["url"],
                 remote["filename"],
                 status_callback,
@@ -273,12 +269,11 @@ class ImageMagickManager:
         url: str,
         filename: str,
         status_callback: StatusCallback | None,
-    ) -> tuple[Path, str]:
+    ) -> Path:
         temp_dir = Path(tempfile.gettempdir()) / "imagec-imagemagick"
         temp_dir.mkdir(parents=True, exist_ok=True)
         target_path = temp_dir / filename
         request = urllib.request.Request(url, headers={"User-Agent": "ImageC/1.0"})
-        digest = hashlib.sha256()
 
         with urllib.request.urlopen(request, timeout=30) as response, open(target_path, "wb") as file_obj:
             total = int(response.headers.get("Content-Length", "0") or "0")
@@ -289,7 +284,6 @@ class ImageMagickManager:
                 if not chunk:
                     break
                 file_obj.write(chunk)
-                digest.update(chunk)
                 downloaded += len(chunk)
                 now = time.time()
                 if status_callback and (now - last_report >= 0.5):
@@ -302,7 +296,7 @@ class ImageMagickManager:
                     last_report = now
 
         self._emit(status_callback, "下载完成，准备解压...")
-        return target_path, digest.hexdigest()
+        return target_path
 
     def _stage_package(
         self,
@@ -315,8 +309,6 @@ class ImageMagickManager:
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
-            if py7zr is None:
-                raise RuntimeError("缺少 py7zr 依赖，无法解压官方 7z 包")
             try:
                 with py7zr.SevenZipFile(archive_path, mode="r") as archive:
                     archive.extractall(path=temp_path)
@@ -490,10 +482,6 @@ class ImageMagickManager:
             return match.group(1)
         return None
 
-    def _version_key(self, version: str) -> tuple[int, int, int, int]:
-        major, minor, patch, revision = version.replace("-", ".").split(".")
-        return int(major), int(minor), int(patch), int(revision)
-
     def _get_architecture(self) -> str:
         machine = platform.machine().lower()
         if "arm" in machine:
@@ -501,15 +489,6 @@ class ImageMagickManager:
         if "86" in machine and "64" not in machine:
             return "x86"
         return "x64"
-
-    def _compare_versions(self, left: str, right: str) -> int:
-        left_key = self._version_key(left)
-        right_key = self._version_key(right)
-        if left_key < right_key:
-            return -1
-        if left_key > right_key:
-            return 1
-        return 0
 
     def _emit(self, callback: StatusCallback | None, message: str) -> None:
         if callback:

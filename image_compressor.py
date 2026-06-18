@@ -17,10 +17,6 @@ IMAGE_PATTERNS = (
     "*.jpeg",
     "*.png",
     "*.webp",
-    "*.JPG",
-    "*.JPEG",
-    "*.PNG",
-    "*.WEBP",
 )
 
 
@@ -48,6 +44,7 @@ class ImageCompressorApp:
         self.resize_var = tk.StringVar(value="不使用")
         self.format_var = tk.StringVar(value="jpg")
         self.is_compressing = False
+        self._cancel_event = threading.Event()
         self.is_runtime_ready = False
         self.magick_path = None
         self.imagemagick_manager = ImageMagickManager()
@@ -183,17 +180,33 @@ class ImageCompressorApp:
         self.max_workers_entry.grid(row=3, column=3, pady=row_padding, sticky="ew")
         self.max_workers_entry.insert(0, "0")
 
+        compress_button_frame = tk.Frame(main_frame)
+        compress_button_frame.grid(
+            row=4, column=0, columnspan=4, pady=(10, 8), sticky="ew"
+        )
+        compress_button_frame.grid_columnconfigure(0, weight=3)
+        compress_button_frame.grid_columnconfigure(1, weight=1)
+
         self.compress_button = tk.Button(
-            main_frame,
+            compress_button_frame,
             text="开始压缩",
             command=self.start_compression,
             bg="#4CAF50",
             fg="white",
             height=2,
         )
-        self.compress_button.grid(
-            row=4, column=0, columnspan=4, pady=(10, 8), sticky="ew"
+        self.compress_button.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+
+        self.cancel_button = tk.Button(
+            compress_button_frame,
+            text="取消",
+            command=self.cancel_compression,
+            bg="#f44336",
+            fg="white",
+            height=2,
+            state="disabled",
         )
+        self.cancel_button.grid(row=0, column=1, sticky="ew", padx=(4, 0))
 
         self.progress = ttk.Progressbar(
             main_frame, orient="horizontal", mode="determinate"
@@ -348,6 +361,8 @@ class ImageCompressorApp:
         self.progress["maximum"] = len(image_files)
         self.progress["value"] = 0
         self.compress_button.config(state="disabled")
+        self.cancel_button.config(state="normal")
+        self._cancel_event.clear()
         self.is_compressing = True
 
         threading.Thread(
@@ -428,6 +443,7 @@ class ImageCompressorApp:
         logging.info("开始处理 %s 个文件", len(image_files))
         completed = 0
         total = len(image_files)
+        cancelled = False
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [
@@ -443,12 +459,21 @@ class ImageCompressorApp:
             ]
 
             for future in concurrent.futures.as_completed(futures):
+                if self._cancel_event.is_set():
+                    cancelled = True
+                    break
                 completed += 1
                 try:
                     result = future.result()
                     self.root.after(0, self.update_status, completed, total, result)
                 except Exception as error:
                     logging.error("任务错误: %s", error)
+
+        if cancelled:
+            for f in futures:
+                f.cancel()
+            self.root.after(0, self.append_log, "压缩任务已取消")
+            logging.info("压缩任务已取消")
 
         self.root.after(0, self.finish_compression)
 
@@ -461,21 +486,35 @@ class ImageCompressorApp:
         self.log_text.insert(tk.END, message + "\n")
         self.log_text.config(state="disabled")
         self.log_text.see(tk.END)
+        self.log_text.update_idletasks()
 
     def finish_compression(self):
         self.is_compressing = False
+        self.cancel_button.config(state="disabled")
         logging.info("所有图片处理完成")
         self.append_log("所有图片处理完成")
         self.compress_button.config(state="normal" if self.is_runtime_ready else "disabled")
 
+    def cancel_compression(self):
+        if self.is_compressing:
+            self._cancel_event.set()
+            self.cancel_button.config(state="disabled")
+
     def on_close(self):
         if self.is_compressing:
-            messagebox.showwarning(
-                "提示", "正在压缩图片，请等待任务完成后再关闭窗口。"
-            )
+            self._cancel_event.set()
+            self.cancel_button.config(state="disabled")
+            self.root.after(500, self._close_after_cancel)
             return
         self.save_config()
         self.root.destroy()
+
+    def _close_after_cancel(self):
+        if not self.is_compressing:
+            self.save_config()
+            self.root.destroy()
+        else:
+            self.root.after(200, self._close_after_cancel)
 
     def _resolve_config_path(self):
         if getattr(sys, "frozen", False):
@@ -564,7 +603,10 @@ class ImageCompressorApp:
             except Exception as error:
                 logging.error("JPG 极速压缩失败: %s, 错误: %s", input_file, error)
 
-        original_size = os.path.getsize(input_file)
+        try:
+            original_size = os.path.getsize(input_file)
+        except OSError as error:
+            return f"失败: {base_name} (无法读取文件大小)"
         ratio = target_size / original_size
         if ratio >= 0.8:
             current_quality = 95
@@ -577,6 +619,7 @@ class ImageCompressorApp:
 
         low, high = 0, 100
         best_quality = 0
+        file_is_valid = False
 
         for _ in range(6):
             cmd = [magick_path, input_file]
@@ -585,8 +628,8 @@ class ImageCompressorApp:
             cmd.append("-strip")
 
             if output_format == "png":
-                compression = max(0, min(9, int(9 * (100 - current_quality) / 100)))
-                cmd.extend(["-quality", str(compression)])
+                compression_level = max(0, min(9, int(9 * (100 - current_quality) / 100)))
+                cmd.extend(["-define", f"png:compression-level={compression_level}"])
             else:
                 cmd.extend(["-quality", str(current_quality)])
 
@@ -604,17 +647,25 @@ class ImageCompressorApp:
                 if size <= target_size:
                     best_quality = current_quality
                     low = current_quality + 1
+                    file_is_valid = True
                 else:
                     high = current_quality - 1
+                    file_is_valid = False
 
                 current_quality = (low + high) // 2
                 if low > high:
                     break
             except Exception as error:
                 logging.error("质量调整失败: %s, 错误: %s", input_file, error)
+                file_is_valid = False
                 break
 
         if best_quality == 0:
+            if os.path.exists(output_file):
+                try:
+                    os.remove(output_file)
+                except OSError:
+                    pass
             warning_message = (
                 f"警告: {base_name} - 质量已降至最低，无法达到目标大小"
             )
@@ -622,29 +673,30 @@ class ImageCompressorApp:
             self.root.after(0, self.append_log, warning_message)
             return f"失败: {base_name} (无法达到目标)"
 
-        cmd = [magick_path, input_file]
-        if resize_value:
-            cmd.extend(["-resize", resize_value])
-        cmd.append("-strip")
+        if not file_is_valid:
+            cmd = [magick_path, input_file]
+            if resize_value:
+                cmd.extend(["-resize", resize_value])
+            cmd.append("-strip")
 
-        if output_format == "png":
-            compression = max(0, min(9, int(9 * (100 - best_quality) / 100)))
-            cmd.extend(["-quality", str(compression)])
-        else:
-            cmd.extend(["-quality", str(best_quality)])
+            if output_format == "png":
+                compression_level = max(0, min(9, int(9 * (100 - best_quality) / 100)))
+                cmd.extend(["-define", f"png:compression-level={compression_level}"])
+            else:
+                cmd.extend(["-quality", str(best_quality)])
 
-        cmd.append(output_file)
+            cmd.append(output_file)
 
-        try:
-            subprocess.run(
-                cmd,
-                capture_output=True,
-                check=True,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-            )
-        except Exception as error:
-            logging.error("最终生成失败: %s, 错误: %s", input_file, error)
-            return f"失败: {base_name} (最终生成失败)"
+            try:
+                subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    check=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                )
+            except Exception as error:
+                logging.error("最终生成失败: %s, 错误: %s", input_file, error)
+                return f"失败: {base_name} (最终生成失败)"
 
         result = f"完成: {base_name}"
         logging.info(result)

@@ -5,6 +5,10 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "pyinstaller>=6.17.0",
     "py7zr>=0.22.0",
+]
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.17.0",
 ]
