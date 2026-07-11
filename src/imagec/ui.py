@@ -3,10 +3,9 @@ from __future__ import annotations
 import logging
 import threading
 import tkinter as tk
-from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from .compression import CompressionRequest, CompressionService, collect_image_files, resolve_max_workers
+from .compression import CompressionService, collect_image_files, resolve_max_workers
 from .config import ConfigStore, DEFAULT_CONFIG, derive_output_path
 from .runtime import ImageMagickManager, EnsureResult, summarize_runtime_result
 

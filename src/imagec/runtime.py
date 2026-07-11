@@ -24,12 +24,9 @@ GITHUB_RELEASE_ASSETS_URL_TEMPLATE = (
 )
 VERSION_PATTERN = re.compile(r"ImageMagick (\d+\.\d+\.\d+-\d+)")
 PACKAGE_PATTERN = re.compile(
-    r'href="(ImageMagick-(7\.\d+\.\d+-\d+)-portable-Q16(?:-HDRI)?-(arm64|x64|x86)\.7z)"',
-    re.IGNORECASE,
-)
-GITHUB_PACKAGE_PATTERN = re.compile(
-    r'href="(/ImageMagick/ImageMagick/releases/download/[^"/]+/'
-    r'(ImageMagick-(7\.\d+\.\d+-\d+)-portable-Q16(?:-HDRI)?-(arm64|x64|x86)\.7z))"',
+    r'href="(?P<href>(?:/ImageMagick/ImageMagick/releases/download/[^"/]+/)?'
+    r'(?P<filename>ImageMagick-(?P<version>7\.\d+\.\d+-\d+)-portable-Q16'
+    r'(?:-HDRI)?-(?P<architecture>arm64|x64|x86)\.7z))"',
     re.IGNORECASE,
 )
 
@@ -74,12 +71,6 @@ class ImageMagickManager:
         if getattr(sys, "frozen", False):
             return os.path.dirname(sys.executable)
         return str(Path(__file__).resolve().parents[2])
-
-    def get_magick_path(self) -> str | None:
-        runtime = self._get_available_runtime()
-        if runtime:
-            return runtime["path"]
-        return None
 
     def get_local_install(self) -> dict | None:
         return self._resolve_install(self.install_dir, "private")
@@ -191,12 +182,20 @@ class ImageMagickManager:
         candidates: list[dict] = []
         errors: list[str] = []
         try:
-            candidates = self._fetch_candidates_from_archive(architecture)
+            candidates = self._fetch_candidates(
+                ARCHIVE_INDEX_URL,
+                ARCHIVE_INDEX_URL,
+                architecture,
+            )
         except Exception as error:
             errors.append(f"archive: {error}")
         if not candidates:
             try:
-                candidates = self._fetch_candidates_from_github_release(architecture)
+                candidates = self._fetch_candidates(
+                    GITHUB_RELEASE_ASSETS_URL_TEMPLATE.format(version=PINNED_IMAGEMAGICK_VERSION),
+                    "https://github.com",
+                    architecture,
+                )
             except Exception as error:
                 errors.append(f"github: {error}")
         if not candidates:
@@ -208,65 +207,35 @@ class ImageMagickManager:
         candidates.sort(key=lambda item: ("-HDRI-" in item["filename"], item["filename"]))
         return candidates[0]
 
-    def _fetch_candidates_from_archive(self, architecture: str) -> list[dict]:
-        request = urllib.request.Request(ARCHIVE_INDEX_URL, headers={"User-Agent": "ImageC/1.0"})
+    def _fetch_candidates(
+        self,
+        index_url: str,
+        base_url: str,
+        architecture: str,
+    ) -> list[dict]:
+        request = urllib.request.Request(index_url, headers={"User-Agent": "ImageC/1.0"})
         with urllib.request.urlopen(request, timeout=8) as response:
             html = response.read().decode("utf-8", errors="ignore")
 
-        candidates = []
-        for filename, version, arch in PACKAGE_PATTERN.findall(html):
-            if version != PINNED_IMAGEMAGICK_VERSION or arch != architecture:
-                continue
-            candidates.append(
-                {
-                    "filename": filename,
-                    "version": version,
-                    "url": urllib.parse.urljoin(ARCHIVE_INDEX_URL, filename),
-                }
-            )
-
+        candidates = self._parse_candidates(html, base_url, architecture)
         if not candidates and architecture != "x64":
-            for filename, version, arch in PACKAGE_PATTERN.findall(html):
-                if version == PINNED_IMAGEMAGICK_VERSION and arch == "x64":
-                    candidates.append(
-                        {
-                            "filename": filename,
-                            "version": version,
-                            "url": urllib.parse.urljoin(ARCHIVE_INDEX_URL, filename),
-                        }
-                    )
+            candidates = self._parse_candidates(html, base_url, "x64")
         return candidates
 
-    def _fetch_candidates_from_github_release(self, architecture: str) -> list[dict]:
-        request = urllib.request.Request(
-            GITHUB_RELEASE_ASSETS_URL_TEMPLATE.format(version=PINNED_IMAGEMAGICK_VERSION),
-            headers={"User-Agent": "ImageC/1.0"},
-        )
-        with urllib.request.urlopen(request, timeout=8) as response:
-            html = response.read().decode("utf-8", errors="ignore")
-
+    def _parse_candidates(self, html: str, base_url: str, architecture: str) -> list[dict]:
         candidates = []
-        for href, filename, version, arch in GITHUB_PACKAGE_PATTERN.findall(html):
-            if version != PINNED_IMAGEMAGICK_VERSION or arch != architecture:
+        for match in PACKAGE_PATTERN.finditer(html):
+            filename = match["filename"]
+            version = match["version"]
+            if version != PINNED_IMAGEMAGICK_VERSION or match["architecture"] != architecture:
                 continue
             candidates.append(
                 {
                     "filename": filename,
                     "version": version,
-                    "url": urllib.parse.urljoin("https://github.com", href),
+                    "url": urllib.parse.urljoin(base_url, match["href"]),
                 }
             )
-
-        if not candidates and architecture != "x64":
-            for href, filename, version, arch in GITHUB_PACKAGE_PATTERN.findall(html):
-                if version == PINNED_IMAGEMAGICK_VERSION and arch == "x64":
-                    candidates.append(
-                        {
-                            "filename": filename,
-                            "version": version,
-                            "url": urllib.parse.urljoin("https://github.com", href),
-                        }
-                    )
         return candidates
 
     def _download_package(
@@ -364,9 +333,7 @@ class ImageMagickManager:
         return self.install_dir
 
     def _find_extracted_magick_dir(self, root_dir: Path) -> Path | None:
-        for magick_exe in root_dir.rglob("magick.exe"):
-            return magick_exe.parent
-        return None
+        return next((path.parent for path in root_dir.rglob("magick.exe")), None)
 
     def _resolve_install(self, install_dir: Path, source: str) -> dict | None:
         magick_path = install_dir / "magick.exe"
@@ -415,24 +382,11 @@ class ImageMagickManager:
     def _failure_result(self, message: str) -> EnsureResult:
         runtime = self._get_available_runtime()
         if runtime:
-            return EnsureResult(
-                magick_path=runtime["path"],
-                version=runtime["version"],
-                source=runtime["source"],
-                updated=False,
-                ready=True,
-                message=f"{message}，继续使用当前可用版本。",
-                fatal=False,
-            )
-
-        return EnsureResult(
-            magick_path=None,
-            version=None,
-            source="none",
+            message = f"{message}，继续使用当前可用版本。"
+        return self._result_from_runtime(
+            runtime,
             updated=False,
-            ready=False,
             message=message,
-            fatal=True,
         )
 
     def _result_from_runtime(self, runtime: dict | None, updated: bool, message: str) -> EnsureResult:

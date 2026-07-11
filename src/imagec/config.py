@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,8 +37,8 @@ class AppPaths:
 
 
 def get_program_dir() -> Path:
-    if getattr(__import__("sys"), "frozen", False):
-        return Path(__import__("sys").executable).resolve().parent
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parents[2]
 
 

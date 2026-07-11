@@ -43,10 +43,7 @@ FILES_TO_REMOVE = {
 FILE_SUFFIXES_TO_REMOVE = {
     ".pyc",
     ".pyo",
-}
-
-FILE_PATTERNS_TO_REMOVE = {
-    "*.spec",
+    ".spec",
 }
 
 
@@ -73,38 +70,21 @@ def parse_args() -> argparse.Namespace:
 
 
 def collect_garbage_paths(root: Path) -> list[Path]:
-    candidates: set[Path] = set()
-
-    for name in DIRECTORIES_TO_REMOVE:
-        path = root / name
-        if path.exists():
-            candidates.add(path)
-
-    for name in FILES_TO_REMOVE:
-        path = root / name
-        if path.exists():
-            candidates.add(path)
-
-    for pattern in FILE_PATTERNS_TO_REMOVE:
-        for path in root.glob(pattern):
-            candidates.add(path)
+    candidates: list[Path] = []
 
     for current_root, dir_names, file_names in os.walk(root, topdown=True):
         dir_names[:] = [name for name in dir_names if name not in EXCLUDED_SCAN_DIRS]
         current = Path(current_root)
 
-        for dir_name in dir_names:
+        for dir_name in tuple(dir_names):
             if dir_name in DIRECTORIES_TO_REMOVE:
-                candidates.add(current / dir_name)
+                candidates.append(current / dir_name)
+                dir_names.remove(dir_name)
 
         for file_name in file_names:
             file_path = current / file_name
-            if file_name in FILES_TO_REMOVE:
-                candidates.add(file_path)
-            if file_path.suffix.lower() in FILE_SUFFIXES_TO_REMOVE:
-                candidates.add(file_path)
-            if file_path.suffix.lower() == ".spec":
-                candidates.add(file_path)
+            if file_name in FILES_TO_REMOVE or file_path.suffix.lower() in FILE_SUFFIXES_TO_REMOVE:
+                candidates.append(file_path)
 
     return sorted(candidates)
 
