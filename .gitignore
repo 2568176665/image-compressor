@@ -13,14 +13,10 @@
 /input/
 /output/
 /compression.log
-/.imagemagick_update.lock
 config.json
 
-# ImageMagick runtime
-/ImageMagick/
-/ImageMagickRuntime/
-/ImageMagick.staging/
-/ImageMagick.backup/
+# Bundled codec staging files
+/src/third_party/codecs/_downloads/
 
 # Local tooling / workspace
 /.codegraph/

@@ -23,7 +23,7 @@ DEFAULT_CONFIG = {
     "format": "jpg",
     "max_workers": "0",
 }
-IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".avif"}
 
 
 @dataclass(slots=True)
@@ -97,7 +97,8 @@ class ConfigStore:
                     loaded = json.load(file_obj)
             except (OSError, json.JSONDecodeError):
                 continue
-            config.update(loaded)
+            if isinstance(loaded, dict):
+                config.update(loaded)
             break
         return config
 

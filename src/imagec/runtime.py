@@ -1,44 +1,46 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import platform
 import re
-import shutil
 import subprocess
 import sys
-import tempfile
-import time
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-import py7zr
+from PIL import features
 
 
-ARCHIVE_INDEX_URL = "https://imagemagick.org/archive/binaries/"
-PINNED_IMAGEMAGICK_VERSION = "7.1.2-23"
-GITHUB_RELEASE_ASSETS_URL_TEMPLATE = (
-    "https://github.com/ImageMagick/ImageMagick/releases/expanded_assets/{version}"
-)
-VERSION_PATTERN = re.compile(r"ImageMagick (\d+\.\d+\.\d+-\d+)")
-PACKAGE_PATTERN = re.compile(
-    r'href="(?P<href>(?:/ImageMagick/ImageMagick/releases/download/[^"/]+/)?'
-    r'(?P<filename>ImageMagick-(?P<version>7\.\d+\.\d+-\d+)-portable-Q16'
-    r'(?:-HDRI)?-(?P<architecture>arm64|x64|x86)\.7z))"',
-    re.IGNORECASE,
-)
-
+CODEC_FORMATS = ("jpg", "png", "webp", "avif")
+CODEC_EXECUTABLES = {
+    "jpg": "cjpegli.exe",
+    "png": "pngquant.exe",
+    "oxipng": "oxipng.exe",
+    "webp": "cwebp.exe",
+    "avif": "avifenc.exe",
+}
+CODEC_VERSION_COMMANDS = {
+    "cjpegli.exe": ["-h"],
+    "pngquant.exe": ["--version"],
+    "oxipng.exe": ["--version"],
+    "cwebp.exe": ["-version"],
+    "avifenc.exe": ["--version"],
+}
+VERSION_PATTERN = re.compile(r"\b(?:v)?(\d+(?:\.\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?)\b")
+MANIFEST_FILENAME = "manifest.json"
+PACKAGED_CODEC_RELATIVE_DIR = Path("codecs") / "windows-x64"
+SOURCE_CODEC_RELATIVE_DIR = Path("src") / "third_party" / "codecs" / "windows-x64"
 StatusCallback = Callable[[str], None]
 
 
 @dataclass(slots=True)
 class EnsureResult:
-    magick_path: str | None
-    version: str | None
+    encoder_paths: dict[str, str]
+    versions: dict[str, str]
     source: str
-    updated: bool
     ready: bool
     message: str
     fatal: bool = False
@@ -52,373 +54,186 @@ class RuntimeSummary:
 
 
 def summarize_runtime_result(result: EnsureResult) -> RuntimeSummary:
-    if result.fatal or not result.ready or not result.magick_path:
+    if result.fatal or not result.ready:
         return RuntimeSummary(level="error", message=result.message, can_start=False)
-    if result.source != "private" or not result.updated:
-        return RuntimeSummary(level="warning", message=result.message, can_start=True)
     return RuntimeSummary(level="info", message=result.message, can_start=True)
 
 
-class ImageMagickManager:
-    def __init__(self, base_dir: str | None = None):
+def get_codec_resource_dir(base_dir: str | Path | None = None) -> Path:
+    candidates: list[Path] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.extend(
+            [
+                Path(meipass) / PACKAGED_CODEC_RELATIVE_DIR,
+                Path(meipass) / "_internal" / PACKAGED_CODEC_RELATIVE_DIR,
+            ]
+        )
+
+    if getattr(sys, "frozen", False):
+        executable_dir = Path(sys.executable).resolve().parent
+        candidates.extend(
+            [
+                executable_dir / PACKAGED_CODEC_RELATIVE_DIR,
+                executable_dir / "_internal" / PACKAGED_CODEC_RELATIVE_DIR,
+            ]
+        )
+
+    if base_dir:
+        base_path = Path(base_dir).resolve()
+        candidates.extend(
+            [
+                base_path / PACKAGED_CODEC_RELATIVE_DIR,
+                base_path / "_internal" / PACKAGED_CODEC_RELATIVE_DIR,
+                base_path / SOURCE_CODEC_RELATIVE_DIR,
+            ]
+        )
+
+    project_root = Path(__file__).resolve().parents[2]
+    candidates.append(project_root / SOURCE_CODEC_RELATIVE_DIR)
+
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return candidates[0] if candidates else project_root / SOURCE_CODEC_RELATIVE_DIR
+
+
+def validate_codec_resources(resource_dir: str | Path) -> list[Path]:
+    root = Path(resource_dir).resolve()
+    manifest_path = root / MANIFEST_FILENAME
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"编码器资源清单缺失: {manifest_path}")
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"编码器资源清单无效: {manifest_path}") from error
+
+    if not isinstance(manifest, dict):
+        raise RuntimeError(f"编码器资源清单无效: {manifest_path}")
+    if manifest.get("platform") != "windows-x64":
+        raise RuntimeError("编码器资源平台必须为 windows-x64")
+
+    encoders = manifest.get("encoders")
+    files = manifest.get("files")
+    if not isinstance(encoders, dict) or not isinstance(files, dict):
+        raise RuntimeError("编码器资源清单缺少 encoders 或 files")
+
+    if any(encoders.get(name) != executable for name, executable in CODEC_EXECUTABLES.items()):
+        raise RuntimeError("编码器资源映射不符合预期")
+    required_names = set(CODEC_EXECUTABLES.values())
+    if not required_names.issubset(encoders.values()):
+        raise RuntimeError("编码器资源清单未包含全部必需编码器")
+    if not required_names.issubset(files):
+        raise RuntimeError("编码器资源清单未校验全部必需编码器")
+
+    validated: list[Path] = []
+    for relative_name, expected_hash in files.items():
+        if (
+            not isinstance(relative_name, str)
+            or not isinstance(expected_hash, str)
+            or re.fullmatch(r"[0-9a-fA-F]{64}", expected_hash) is None
+        ):
+            raise RuntimeError("编码器资源清单包含无效文件项")
+        path = (root / relative_name).resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            raise FileNotFoundError(f"编码器资源缺失: {path}")
+        actual_hash = _sha256(path)
+        if actual_hash.lower() != expected_hash.lower():
+            raise RuntimeError(f"编码器资源校验失败: {path.name}")
+        validated.append(path)
+
+    return [manifest_path, *validated]
+
+
+class CodecRuntimeManager:
+    def __init__(
+        self,
+        base_dir: str | None = None,
+        resource_dir: str | None = None,
+    ) -> None:
         self.base_dir = Path(base_dir or self._get_base_dir())
-        self.lock_file = self.base_dir / ".imagemagick_update.lock"
-        self.install_dir = self.base_dir / "ImageMagick"
-        self.staging_dir = self.base_dir / "ImageMagick.staging"
-        self.backup_dir = self.base_dir / "ImageMagick.backup"
+        self.resource_dir = Path(resource_dir) if resource_dir else None
 
-    def _get_base_dir(self) -> str:
-        if getattr(sys, "frozen", False):
-            return os.path.dirname(sys.executable)
-        return str(Path(__file__).resolve().parents[2])
-
-    def get_local_install(self) -> dict | None:
-        return self._resolve_install(self.install_dir, "private")
-
-    def ensure_imagemagick_ready(
+    def ensure_codecs_ready(
         self,
         status_callback: StatusCallback | None = None,
     ) -> EnsureResult:
+        if not self._is_supported_platform():
+            return self._failure("当前版本仅支持 Windows x64 编码器")
+
+        resource_dir = self.resource_dir or get_codec_resource_dir(self.base_dir)
         try:
-            self._repair_install_dirs()
-        except Exception as error:
-            return self._failure_result(f"修复本地 ImageMagick 目录失败: {error}")
+            validate_codec_resources(resource_dir)
+            manifest = self._load_manifest(resource_dir)
+            encoder_paths = self._resolve_encoder_paths(resource_dir, manifest)
+        except (OSError, RuntimeError, UnicodeError, ValueError) as error:
+            return self._failure(str(error))
 
-        local = self.get_local_install()
-        if local and local["version"] == PINNED_IMAGEMAGICK_VERSION:
-            return EnsureResult(
-                magick_path=local["path"],
-                version=local["version"],
-                source=local["source"],
-                updated=False,
-                ready=True,
-                message=f"ImageMagick {local['version']} 已就绪",
-                fatal=False,
-            )
+        if not self._pillow_supports_avif():
+            return self._failure("当前 Pillow 未启用 AVIF 支持")
 
-        try:
-            lock_acquired = self._acquire_lock(local_available=local is not None)
-        except Exception as error:
-            return self._failure_result(f"创建 ImageMagick 更新锁失败: {error}")
+        versions: dict[str, str] = {}
+        errors: list[str] = []
+        manifest_versions = manifest.get("versions", {})
+        if not isinstance(manifest_versions, dict):
+            return self._failure("编码器资源清单版本信息无效")
+        for name, path in encoder_paths.items():
+            version = self._get_version(path)
+            if version is None:
+                errors.append(Path(path).name)
+            else:
+                versions[name] = manifest_versions.get(Path(path).name, version)
 
-        if not lock_acquired:
-            return self._result_from_runtime(
-                self._get_available_runtime(),
-                updated=False,
-                message="另一个实例正在准备 ImageMagick，当前继续使用现有版本。",
-            )
-
-        try:
-            return self._ensure_imagemagick_ready_locked(local, status_callback)
-        except Exception as error:  # pragma: no cover
-            return self._failure_result(f"准备 ImageMagick 失败: {error}")
-        finally:
-            self._release_lock()
-
-    def _ensure_imagemagick_ready_locked(
-        self,
-        local: dict | None,
-        status_callback: StatusCallback | None,
-    ) -> EnsureResult:
-        try:
-            remote = self._fetch_pinned_package()
-        except Exception as error:
-            return self._failure_result(f"获取版本信息失败: {error}")
-
-        local_version = (local or {}).get("version")
-        if local and local_version and local_version == remote["version"]:
-            return EnsureResult(
-                magick_path=local["path"],
-                version=local_version,
-                source=local["source"],
-                updated=False,
-                ready=True,
-                message=f"ImageMagick 已使用固定版本 {local_version}",
-                fatal=False,
-            )
-
-        if local and not local_version:
-            self._emit(status_callback, f"本地版本未知，准备切换到固定版本 {remote['version']} ...")
-        elif local_version:
-            self._emit(
-                status_callback,
-                f"当前版本 {local_version}，准备切换到固定版本 {remote['version']} ...",
-            )
-        else:
-            self._emit(status_callback, f"开始下载固定版本 ImageMagick {remote['version']} ...")
-
-        archive_path = None
-        try:
-            archive_path = self._download_package(
-                remote["url"],
-                remote["filename"],
-                status_callback,
-            )
-            staged_dir = self._stage_package(archive_path, remote["version"], status_callback)
-            install_dir = self._activate_staged_install(
-                staged_dir,
-                remote["version"],
-                status_callback,
-            )
-        except Exception as error:
-            return self._failure_result(f"准备 ImageMagick 失败: {error}")
-        finally:
-            if archive_path is not None:
-                self._cleanup_file(archive_path)
-            self._cleanup_path_if_exists(self.staging_dir)
+        if errors:
+            return self._failure(f"编码器无法运行: {', '.join(errors)}")
 
         return EnsureResult(
-            magick_path=str(install_dir / "magick.exe"),
-            version=remote["version"],
-            source="private",
-            updated=True,
+            encoder_paths=encoder_paths,
+            versions=versions,
+            source="bundled",
             ready=True,
-            message=f"ImageMagick 已更新到 {remote['version']}",
+            message=(
+                "编码器已就绪: "
+                + ", ".join(f"{name} {version}" for name, version in versions.items())
+            ),
             fatal=False,
         )
 
-    def _fetch_pinned_package(self) -> dict:
-        architecture = self._get_architecture()
-        candidates: list[dict] = []
-        errors: list[str] = []
-        try:
-            candidates = self._fetch_candidates(
-                ARCHIVE_INDEX_URL,
-                ARCHIVE_INDEX_URL,
-                architecture,
-            )
-        except Exception as error:
-            errors.append(f"archive: {error}")
-        if not candidates:
-            try:
-                candidates = self._fetch_candidates(
-                    GITHUB_RELEASE_ASSETS_URL_TEMPLATE.format(version=PINNED_IMAGEMAGICK_VERSION),
-                    "https://github.com",
-                    architecture,
-                )
-            except Exception as error:
-                errors.append(f"github: {error}")
-        if not candidates:
-            detail = f"（{'; '.join(errors)}）" if errors else ""
-            raise RuntimeError(
-                f"未找到固定版本 ImageMagick {PINNED_IMAGEMAGICK_VERSION} 的便携包{detail}"
-            )
+    def _get_base_dir(self) -> str:
+        if getattr(sys, "frozen", False):
+            return str(Path(sys.executable).resolve().parent)
+        return str(Path(__file__).resolve().parents[2])
 
-        candidates.sort(key=lambda item: ("-HDRI-" in item["filename"], item["filename"]))
-        return candidates[0]
+    def _is_supported_platform(self) -> bool:
+        machine = platform.machine().lower()
+        return os.name == "nt" and machine in {"amd64", "x86_64", "x64"}
 
-    def _fetch_candidates(
-        self,
-        index_url: str,
-        base_url: str,
-        architecture: str,
-    ) -> list[dict]:
-        request = urllib.request.Request(index_url, headers={"User-Agent": "ImageC/1.0"})
-        with urllib.request.urlopen(request, timeout=8) as response:
-            html = response.read().decode("utf-8", errors="ignore")
+    def _load_manifest(self, resource_dir: Path) -> dict:
+        return json.loads((resource_dir / MANIFEST_FILENAME).read_text(encoding="utf-8"))
 
-        candidates = self._parse_candidates(html, base_url, architecture)
-        if not candidates and architecture != "x64":
-            candidates = self._parse_candidates(html, base_url, "x64")
-        return candidates
-
-    def _parse_candidates(self, html: str, base_url: str, architecture: str) -> list[dict]:
-        candidates = []
-        for match in PACKAGE_PATTERN.finditer(html):
-            filename = match["filename"]
-            version = match["version"]
-            if version != PINNED_IMAGEMAGICK_VERSION or match["architecture"] != architecture:
-                continue
-            candidates.append(
-                {
-                    "filename": filename,
-                    "version": version,
-                    "url": urllib.parse.urljoin(base_url, match["href"]),
-                }
-            )
-        return candidates
-
-    def _download_package(
-        self,
-        url: str,
-        filename: str,
-        status_callback: StatusCallback | None,
-    ) -> Path:
-        temp_dir = Path(tempfile.gettempdir()) / "imagec-imagemagick"
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        target_path = temp_dir / filename
-        request = urllib.request.Request(url, headers={"User-Agent": "ImageC/1.0"})
-
-        with urllib.request.urlopen(request, timeout=30) as response, target_path.open("wb") as file_obj:
-            total = int(response.headers.get("Content-Length", "0") or "0")
-            downloaded = 0
-            last_report = 0.0
-            while True:
-                chunk = response.read(1024 * 256)
-                if not chunk:
-                    break
-                file_obj.write(chunk)
-                downloaded += len(chunk)
-                now = time.time()
-                if status_callback and (now - last_report >= 0.5):
-                    if total > 0:
-                        percent = int(downloaded * 100 / total)
-                        self._emit(status_callback, f"正在下载 ImageMagick... {percent}%")
-                    else:
-                        mb = downloaded / (1024 * 1024)
-                        self._emit(status_callback, f"正在下载 ImageMagick... {mb:.1f} MB")
-                    last_report = now
-
-        self._emit(status_callback, "下载完成，准备解压...")
-        return target_path
-
-    def _stage_package(
-        self,
-        archive_path: Path,
-        version: str,
-        status_callback: StatusCallback | None,
-    ) -> Path:
-        self._emit(status_callback, "正在解压 ImageMagick...")
-        self._cleanup_path_if_exists(self.staging_dir)
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            try:
-                with py7zr.SevenZipFile(archive_path, mode="r") as archive:
-                    archive.extractall(path=temp_path)
-            except Exception as error:
-                raise RuntimeError(f"解压 ImageMagick 失败: {error}") from error
-
-            extracted_dir = self._find_extracted_magick_dir(temp_path)
-            if extracted_dir is None:
-                raise RuntimeError("解压完成，但未找到 magick.exe")
-
-            shutil.move(str(extracted_dir), str(self.staging_dir))
-
-        self._validate_install_dir(self.staging_dir)
-        self._emit(status_callback, f"ImageMagick {version} 已完成解压校验。")
-        return self.staging_dir
-
-    def _activate_staged_install(
-        self,
-        staged_dir: Path,
-        version: str,
-        status_callback: StatusCallback | None,
-    ) -> Path:
-        self._emit(status_callback, "正在切换 ImageMagick 运行时...")
-        self._validate_install_dir(staged_dir)
-
-        if self.backup_dir.exists():
-            self._cleanup_path(self.backup_dir)
-
-        moved_current = False
-        moved_staged = False
-        try:
-            if self.install_dir.exists():
-                self.install_dir.rename(self.backup_dir)
-                moved_current = True
-
-            staged_dir.rename(self.install_dir)
-            moved_staged = True
-            self._validate_install_dir(self.install_dir)
-        except Exception as error:
-            if moved_staged and self.install_dir.exists():
-                self._cleanup_path_if_exists(self.install_dir)
-            if moved_current and self.backup_dir.exists():
-                self._restore_backup_install()
-            raise RuntimeError(f"切换 ImageMagick 失败: {error}") from error
-
-        self._cleanup_path_if_exists(self.backup_dir)
-        self._emit(status_callback, f"ImageMagick {version} 已准备完成。")
-        return self.install_dir
-
-    def _find_extracted_magick_dir(self, root_dir: Path) -> Path | None:
-        return next((path.parent for path in root_dir.rglob("magick.exe")), None)
-
-    def _resolve_install(self, install_dir: Path, source: str) -> dict | None:
-        magick_path = install_dir / "magick.exe"
-        if not magick_path.exists():
-            return None
-
-        return {
-            "path": str(magick_path),
-            "version": self._get_version(str(magick_path)),
-            "source": source,
+    def _resolve_encoder_paths(self, resource_dir: Path, manifest: dict) -> dict[str, str]:
+        encoders = manifest["encoders"]
+        paths = {
+            format_name: str((resource_dir / encoders[format_name]).resolve())
+            for format_name in CODEC_FORMATS
         }
+        paths["oxipng"] = str((resource_dir / encoders["oxipng"]).resolve())
+        return paths
 
-    def _get_available_runtime(self) -> dict | None:
-        local = self.get_local_install()
-        if local:
-            return local
+    def _pillow_supports_avif(self) -> bool:
+        try:
+            return bool(features.check("avif"))
+        except (AttributeError, ValueError):
+            return False
 
-        system_path = shutil.which("magick")
-        if not system_path:
-            return None
-
-        return {
-            "path": system_path,
-            "version": self._get_version(system_path),
-            "source": "system",
-        }
-
-    def _validate_install_dir(self, install_dir: Path) -> None:
-        magick_path = install_dir / "magick.exe"
-        if not install_dir.is_dir() or not magick_path.exists():
-            raise RuntimeError(f"运行时目录无效: {install_dir}")
-
-    def _repair_install_dirs(self) -> None:
-        self._cleanup_path_if_exists(self.staging_dir)
-        if self.backup_dir.exists():
-            if self.install_dir.exists():
-                self._cleanup_path(self.backup_dir)
-            else:
-                self._restore_backup_install()
-
-    def _restore_backup_install(self) -> None:
-        if not self.backup_dir.exists() or self.install_dir.exists():
-            return
-        self.backup_dir.rename(self.install_dir)
-
-    def _failure_result(self, message: str) -> EnsureResult:
-        runtime = self._get_available_runtime()
-        if runtime:
-            message = f"{message}，继续使用当前可用版本。"
-        return self._result_from_runtime(
-            runtime,
-            updated=False,
-            message=message,
-        )
-
-    def _result_from_runtime(self, runtime: dict | None, updated: bool, message: str) -> EnsureResult:
-        if runtime:
-            return EnsureResult(
-                magick_path=runtime["path"],
-                version=runtime["version"],
-                source=runtime["source"],
-                updated=updated,
-                ready=True,
-                message=message,
-                fatal=False,
-            )
-
-        return EnsureResult(
-            magick_path=None,
-            version=None,
-            source="none",
-            updated=updated,
-            ready=False,
-            message=message,
-            fatal=True,
-        )
-
-    def _get_version(self, magick_path: str | None) -> str | None:
-        if not magick_path:
-            return None
-
+    def _get_version(self, executable: str) -> str | None:
+        executable_name = Path(executable).name.lower()
+        arguments = CODEC_VERSION_COMMANDS.get(executable_name, ["--version"])
         creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         try:
             completed = subprocess.run(
-                [magick_path, "-version"],
+                [executable, *arguments],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -428,67 +243,34 @@ class ImageMagickManager:
         except (OSError, subprocess.SubprocessError):
             return None
 
+        if completed.returncode != 0:
+            return None
         output = (completed.stdout or "") + "\n" + (completed.stderr or "")
         match = VERSION_PATTERN.search(output)
         if match:
             return match.group(1)
-        return None
+        if output.lstrip().startswith("Usage:"):
+            return "available"
+        return output.strip().splitlines()[0][:120] if output.strip() else "unknown"
 
-    def _get_architecture(self) -> str:
-        machine = platform.machine().lower()
-        if "arm" in machine:
-            return "arm64"
-        if "86" in machine and "64" not in machine:
-            return "x86"
-        return "x64"
+    def _failure(self, message: str) -> EnsureResult:
+        return EnsureResult(
+            encoder_paths={},
+            versions={},
+            source="none",
+            ready=False,
+            message=message,
+            fatal=True,
+        )
 
     def _emit(self, callback: StatusCallback | None, message: str) -> None:
         if callback:
             callback(message)
 
-    def _acquire_lock(self, local_available: bool) -> bool:
-        deadline = time.time() + (3 if local_available else 90)
-        while time.time() < deadline:
-            try:
-                fd = os.open(self.lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.write(fd, str(os.getpid()).encode("utf-8"))
-                os.close(fd)
-                return True
-            except FileExistsError:
-                if self._lock_is_stale():
-                    self._release_lock()
-                    continue
-                time.sleep(0.2)
-        return False
 
-    def _lock_is_stale(self) -> bool:
-        try:
-            modified_at = self.lock_file.stat().st_mtime
-        except FileNotFoundError:
-            return False
-        return (time.time() - modified_at) > 600
-
-    def _release_lock(self) -> None:
-        try:
-            self.lock_file.unlink()
-        except (FileNotFoundError, OSError):
-            return
-
-    def _cleanup_path(self, path: Path) -> None:
-        if path.is_dir():
-            shutil.rmtree(path)
-            return
-        if path.exists():
-            path.unlink()
-
-    def _cleanup_path_if_exists(self, path: Path) -> None:
-        try:
-            self._cleanup_path(path)
-        except (FileNotFoundError, OSError):
-            return
-
-    def _cleanup_file(self, file_path: Path) -> None:
-        try:
-            file_path.unlink(missing_ok=True)
-        except OSError:
-            return
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file_obj:
+        for chunk in iter(lambda: file_obj.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()

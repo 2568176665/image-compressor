@@ -16,13 +16,20 @@ ENTRY_SCRIPT = PROJECT_ROOT / "main.py"
 SRC_DIR = PROJECT_ROOT / "src"
 APP_NAME = "image_compressor"
 ICON_FILE = PROJECT_ROOT / "assets" / "app.ico"
+CODEC_RESOURCE_DIR = PROJECT_ROOT / "src" / "third_party" / "codecs" / "windows-x64"
+CODEC_PACKAGE_DIR = Path("codecs") / "windows-x64"
+
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from imagec.runtime import validate_codec_resources
 
 EXCLUDED_SCAN_DIRS = {
     ".git",
     ".venv",
     ".codegraph",
     ".claude",
-    "ImageMagick",
+    "third_party",
 }
 
 DIRECTORIES_TO_REMOVE = {
@@ -37,7 +44,6 @@ DIRECTORIES_TO_REMOVE = {
 FILES_TO_REMOVE = {
     "compression.log",
     "nuitka-crash-report.xml",
-    ".imagemagick_update.lock",
 }
 
 FILE_SUFFIXES_TO_REMOVE = {
@@ -135,6 +141,8 @@ def build(root: Path, onedir: bool) -> None:
     if not SRC_DIR.exists():
         raise FileNotFoundError(f"Source directory not found: {SRC_DIR}")
 
+    codec_resources = validate_codec_resources(CODEC_RESOURCE_DIR)
+
     version = read_project_version()
     version_file = write_version_file(version)
     cmd = [
@@ -144,6 +152,7 @@ def build(root: Path, onedir: bool) -> None:
         "--noconfirm",
         "--clean",
         "--windowed",
+        "--noupx",
         "--name",
         APP_NAME,
         "--paths",
@@ -151,6 +160,7 @@ def build(root: Path, onedir: bool) -> None:
         "--version-file",
         str(version_file),
     ]
+    cmd.extend(build_codec_arguments(codec_resources))
 
     if onedir:
         cmd.append("--onedir")
@@ -263,8 +273,34 @@ def validate_build_output(output_path: Path, onedir: bool) -> None:
         executable = output_path / f"{APP_NAME}.exe"
         if not executable.exists():
             raise FileNotFoundError(f"Onedir executable missing: {executable}")
+        resource_candidates = [
+            output_path / CODEC_PACKAGE_DIR,
+            output_path / "_internal" / CODEC_PACKAGE_DIR,
+        ]
+        resource_dir = next(
+            (candidate for candidate in resource_candidates if (candidate / "manifest.json").is_file()),
+            None,
+        )
+        if resource_dir is None:
+            raise FileNotFoundError("Onedir 编码器资源目录缺失")
+        validate_codec_resources(resource_dir)
     elif output_path.suffix.lower() != ".exe":
         raise RuntimeError(f"Unexpected build artifact: {output_path}")
+    else:
+        payload = output_path.read_bytes()
+        required_names = tuple(path.name for path in validate_codec_resources(CODEC_RESOURCE_DIR))
+        missing = [name for name in required_names if name.encode("utf-8") not in payload]
+        if missing:
+            raise RuntimeError(f"Onefile 编码器资源未内置: {', '.join(missing)}")
+
+
+def build_codec_arguments(resource_files: list[Path]) -> list[str]:
+    arguments: list[str] = []
+    for resource_file in resource_files:
+        relative_path = resource_file.relative_to(CODEC_RESOURCE_DIR)
+        destination = CODEC_PACKAGE_DIR / relative_path.parent
+        arguments.extend(["--add-data", f"{resource_file}{os.pathsep}{destination.as_posix()}"])
+    return arguments
 
 
 def main() -> int:

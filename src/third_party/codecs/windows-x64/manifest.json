@@ -1,0 +1,46 @@
+{
+  "platform": "windows-x64",
+  "versions": {
+    "cjpegli.exe": "libjxl 0.11.2",
+    "pngquant.exe": "pngquant 3.0.3",
+    "oxipng.exe": "oxipng 10.1.1",
+    "cwebp.exe": "libwebp 1.6.0",
+    "avifenc.exe": "libavif 1.4.1"
+  },
+  "encoders": {
+    "jpg": "cjpegli.exe",
+    "png": "pngquant.exe",
+    "oxipng": "oxipng.exe",
+    "webp": "cwebp.exe",
+    "avif": "avifenc.exe"
+  },
+  "files": {
+    "avifenc.exe": "c334ccca6d78dd79b8a7387c13ff54bbf09287335f99b5f1a609ea9f965c6f07",
+    "cjpegli.exe": "f89af03898d066662e1715a4491ff2c81403f776cc88359020e5f7a1ea9f64c7",
+    "cwebp.exe": "6a2f5cb5dce71366353ab1d9caf9c636e039f25703acfce1c148eed346f2f72a",
+    "LICENSE.cjpegli-brotli.txt": "60ae0f13e76cc2eaaa108677eefa4ce16b647f6bbe8cf0a1ac9429d82eca7248",
+    "LICENSE.cjpegli-giflib.txt": "0c9b7990ecdca88b676db232c226548ac408b279f550d424d996f0d83591dd8e",
+    "LICENSE.cjpegli-highway.txt": "5ad8c213095c573921d7388edf93f6a9f54490b8ebf3b165ae8ef1947cf70846",
+    "LICENSE.cjpegli-libjpeg-turbo.txt": "2189dc45a8fe96204069f8124caa53a148dfdc193f50f584c6ca7849a6072872",
+    "LICENSE.cjpegli-libjxl.txt": "2c783d8d5d952bd0726292e56ad1f3f247f370667809497a8020b8c2915ba470",
+    "LICENSE.cjpegli-libpng.txt": "16d9daaafbf63a31a5bdc91d4600972548fef5aaa1244202393288dbd079c49a",
+    "LICENSE.cjpegli-libwebp.txt": "050b5ba2c8eb0bd3b996e12ef79312a1c62237f2de1b3c609843f00bb74744f3",
+    "LICENSE.cjpegli-sjpeg.txt": "3ddf9be5c28fe27dad143a5dc76eea25222ad1dd68934a047064e56ed2fa40c5",
+    "LICENSE.cjpegli-skcms.txt": "5fad7f1a5143034fc76c976e9d34694663764808df7b777943048674a4c87ff1",
+    "LICENSE.cjpegli-zlib.txt": "845efc77857d485d91fb3e0b884aaa929368c717ae8186b66fe1ed2495753243",
+    "LICENSE.lcms2.txt": "6dbd60437f8ef91d8de1f08ad75882547fd4931bfcc3566a0735f28db1484d31",
+    "LICENSE.libavif.txt": "3480d4fbb11fd2d30a956f15ae1f70091396feea1235d47903beb2ac56d9b4f2",
+    "LICENSE.libjpeg-turbo.txt": "2189dc45a8fe96204069f8124caa53a148dfdc193f50f584c6ca7849a6072872",
+    "LICENSE.libjxl.txt": "2c783d8d5d952bd0726292e56ad1f3f247f370667809497a8020b8c2915ba470",
+    "LICENSE.libpng.txt": "16d9daaafbf63a31a5bdc91d4600972548fef5aaa1244202393288dbd079c49a",
+    "LICENSE.libwebp.txt": "dd4250409717724a04cd959ebf5139cb5a23fbfc68669931ad1b268b01cdf388",
+    "LICENSE.oxipng.txt": "1bc9688d785fa50345f803824ddde000bdabedda9d1803dc41a1fedd81f784fc",
+    "LICENSE.pngquant.txt": "e4f467f7abf860b4e620f5f60fdd88bc3a63a0fdb98a481fb002b5e511c9b826",
+    "LICENSE.zlib.txt": "845efc77857d485d91fb3e0b884aaa929368c717ae8186b66fe1ed2495753243",
+    "liblcms2-2.dll": "03314471fadd04cdd63c108472ff85d058903d236a0356c14eda363f0e1ccb65",
+    "libpng16-16.dll": "5c1dd5410af563f4a3c4aee10d1f749aa71e0d7fb3b4fac240eb9e96cadebd26",
+    "oxipng.exe": "56e29d2bc4a3a6af911f2168b20d5a911cb808fa291579d974549a9e24ee5748",
+    "pngquant.exe": "540eed3a181401f3cd3f0cfc63f8ec3655a3d8b93b05c9333426f8e1e2193b3f",
+    "zlib1.dll": "11cd91171765cd65f1c3362e3df67e5f5a618a6b88c8cdec899b802eaf1c7b0d"
+  }
+}

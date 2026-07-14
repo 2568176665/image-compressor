@@ -1,16 +1,41 @@
 from __future__ import annotations
 
-from imagec.runtime import EnsureResult, ImageMagickManager, summarize_runtime_result
+import hashlib
+import json
+from pathlib import Path
+
+from imagec.runtime import (
+    CODEC_EXECUTABLES,
+    CodecRuntimeManager,
+    EnsureResult,
+    summarize_runtime_result,
+    validate_codec_resources,
+)
+
+
+def _write_manifest(root: Path) -> None:
+    files: dict[str, str] = {}
+    for executable in sorted(set(CODEC_EXECUTABLES.values())):
+        path = root / executable
+        path.write_bytes(executable.encode("ascii"))
+        files[executable] = hashlib.sha256(path.read_bytes()).hexdigest()
+    (root / "LICENSE.txt").write_text("license", encoding="utf-8")
+    files["LICENSE.txt"] = hashlib.sha256((root / "LICENSE.txt").read_bytes()).hexdigest()
+    manifest = {
+        "platform": "windows-x64",
+        "encoders": CODEC_EXECUTABLES,
+        "files": files,
+    }
+    (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
 
 def test_summarize_runtime_result_marks_fatal_failure() -> None:
     result = EnsureResult(
-        magick_path=None,
-        version=None,
+        encoder_paths={},
+        versions={},
         source="none",
-        updated=False,
         ready=False,
-        message="missing runtime",
+        message="missing codecs",
         fatal=True,
     )
 
@@ -20,42 +45,76 @@ def test_summarize_runtime_result_marks_fatal_failure() -> None:
     assert summary.can_start is False
 
 
-def test_summarize_runtime_result_marks_fallback_warning() -> None:
+def test_summarize_runtime_result_marks_ready_bundle() -> None:
     result = EnsureResult(
-        magick_path="C:/magick.exe",
-        version="7.1.2-23",
-        source="system",
-        updated=False,
+        encoder_paths={"jpg": "cjpegli.exe"},
+        versions={"jpg": "0.11.2"},
+        source="bundled",
         ready=True,
-        message="using system runtime",
-        fatal=False,
+        message="ready",
     )
 
     summary = summarize_runtime_result(result)
 
-    assert summary.level == "warning"
+    assert summary.level == "info"
     assert summary.can_start is True
 
 
-def test_parse_candidates_supports_archive_and_github_links() -> None:
-    html = """
-    <a href="ImageMagick-7.1.2-23-portable-Q16-x64.7z">archive</a>
-    <a href="/ImageMagick/ImageMagick/releases/download/7.1.2-23/ImageMagick-7.1.2-23-portable-Q16-HDRI-arm64.7z">github</a>
-    """
-    manager = ImageMagickManager()
+def test_validate_codec_resources_detects_tampering(tmp_path: Path) -> None:
+    _write_manifest(tmp_path)
 
-    archive = manager._parse_candidates(
-        html,
-        "https://imagemagick.org/archive/binaries/",
-        "x64",
-    )
-    github = manager._parse_candidates(html, "https://github.com", "arm64")
+    files = validate_codec_resources(tmp_path)
 
-    assert archive[0]["url"] == (
-        "https://imagemagick.org/archive/binaries/"
-        "ImageMagick-7.1.2-23-portable-Q16-x64.7z"
-    )
-    assert github[0]["url"] == (
-        "https://github.com/ImageMagick/ImageMagick/releases/download/7.1.2-23/"
-        "ImageMagick-7.1.2-23-portable-Q16-HDRI-arm64.7z"
-    )
+    assert tmp_path / "manifest.json" in files
+    assert tmp_path / "cjpegli.exe" in files
+
+    (tmp_path / "cjpegli.exe").write_bytes(b"tampered")
+    try:
+        validate_codec_resources(tmp_path)
+    except RuntimeError as error:
+        assert "校验失败" in str(error)
+    else:  # pragma: no cover
+        raise AssertionError("tampered resource was accepted")
+
+
+def test_runtime_resolves_all_encoders_and_checks_pillow(tmp_path: Path, monkeypatch) -> None:
+    _write_manifest(tmp_path)
+    manager = CodecRuntimeManager(resource_dir=str(tmp_path))
+    monkeypatch.setattr(manager, "_is_supported_platform", lambda: True)
+    monkeypatch.setattr(manager, "_pillow_supports_avif", lambda: True)
+    monkeypatch.setattr(manager, "_get_version", lambda _path: "test-version")
+
+    result = manager.ensure_codecs_ready()
+
+    assert result.ready is True
+    assert result.source == "bundled"
+    assert set(result.encoder_paths) == {"jpg", "png", "oxipng", "webp", "avif"}
+    assert set(result.versions) == set(result.encoder_paths)
+
+
+def test_runtime_fails_when_manifest_is_missing(tmp_path: Path, monkeypatch) -> None:
+    manager = CodecRuntimeManager(resource_dir=str(tmp_path))
+    monkeypatch.setattr(manager, "_is_supported_platform", lambda: True)
+
+    result = manager.ensure_codecs_ready()
+
+    assert result.ready is False
+    assert result.fatal is True
+    assert "清单" in result.message
+
+
+def test_runtime_keeps_encoder_ready_log_without_progress_logs(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _write_manifest(tmp_path)
+    manager = CodecRuntimeManager(resource_dir=str(tmp_path))
+    monkeypatch.setattr(manager, "_is_supported_platform", lambda: True)
+    monkeypatch.setattr(manager, "_pillow_supports_avif", lambda: True)
+    monkeypatch.setattr(manager, "_get_version", lambda _path: "test-version")
+    messages: list[str] = []
+
+    result = manager.ensure_codecs_ready(status_callback=messages.append)
+
+    assert result.ready is True
+    assert messages == []
+    assert result.message.startswith("编码器已就绪:")

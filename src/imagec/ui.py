@@ -5,16 +5,16 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from .compression import CompressionService, collect_image_files, resolve_max_workers
+from .compression import SUPPORTED_FORMATS, CompressionService, collect_image_files, normalize_format, resolve_max_workers
 from .config import ConfigStore, DEFAULT_CONFIG, derive_output_path
-from .runtime import ImageMagickManager, EnsureResult, summarize_runtime_result
+from .runtime import CodecRuntimeManager, EnsureResult, RuntimeSummary, summarize_runtime_result
 
 
 class ImageCompressorApp:
-    def __init__(self, root: tk.Tk, *, config_store: ConfigStore, runtime_manager: ImageMagickManager):
+    def __init__(self, root: tk.Tk, *, config_store: ConfigStore, runtime_manager: CodecRuntimeManager):
         self.root = root
         self.root.title("图片压缩工具")
-        self.root.geometry("600x440")
+        self.root.geometry("600x460")
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.grid_columnconfigure(0, weight=1)
@@ -23,8 +23,8 @@ class ImageCompressorApp:
         self.config_store = config_store
         self.runtime_manager = runtime_manager
         self.runtime_result: EnsureResult | None = None
-        self.runtime_summary = None
-        self.service = CompressionService(magick_path=None)
+        self.runtime_summary: RuntimeSummary | None = None
+        self.service = CompressionService(encoder_paths=None)
         self.is_compressing = False
 
         self.auto_output_var = tk.BooleanVar(value=True)
@@ -104,10 +104,10 @@ class ImageCompressorApp:
 
         size_frame = tk.Frame(resize_group)
         size_frame.grid(row=1, column=0, pady=(4, 0), sticky="w")
-        tk.Label(size_frame, text="宽").grid(row=0, column=0, sticky="w")
+        tk.Label(size_frame, text="宽:").grid(row=0, column=0, sticky="w")
         self.width_entry = tk.Entry(size_frame, width=6)
         self.width_entry.grid(row=0, column=1, padx=(4, 10))
-        tk.Label(size_frame, text="高").grid(row=0, column=2, sticky="w")
+        tk.Label(size_frame, text="高:").grid(row=0, column=2, sticky="w")
         self.height_entry = tk.Entry(size_frame, width=6)
         self.height_entry.grid(row=0, column=3, padx=(4, 0))
 
@@ -115,7 +115,7 @@ class ImageCompressorApp:
         format_combo = ttk.Combobox(
             main_frame,
             textvariable=self.format_var,
-            values=["jpg", "png", "webp"],
+            values=list(SUPPORTED_FORMATS),
             state="readonly",
             width=field_width,
         )
@@ -155,7 +155,7 @@ class ImageCompressorApp:
         self.progress.grid(row=5, column=0, columnspan=4, pady=(0, 8), sticky="ew")
 
         tk.Label(main_frame, text="日志:").grid(row=6, column=0, padx=(0, 8), pady=(2, 4), sticky="nw")
-        self.log_text = tk.Text(main_frame, height=6, state="disabled", wrap="word")
+        self.log_text = tk.Text(main_frame, height=7, state="disabled", wrap="word")
         self.log_text.grid(row=7, column=0, columnspan=4, sticky="nsew")
         self.refresh_auto_output_button()
 
@@ -206,7 +206,9 @@ class ImageCompressorApp:
             self.height_entry.insert(0, height)
 
     def select_file(self) -> None:
-        file_path = filedialog.askopenfilename(filetypes=[("Image files", "*.jpg *.jpeg *.png *.webp")])
+        file_path = filedialog.askopenfilename(
+            filetypes=[("Image files", "*.jpg *.jpeg *.png *.webp *.avif")]
+        )
         if file_path:
             self.input_path_var.set(file_path)
 
@@ -225,7 +227,8 @@ class ImageCompressorApp:
         self.input_path_var.set(config.get("input_path", DEFAULT_CONFIG["input_path"]))
         self.auto_output_var.set(config.get("auto_output", DEFAULT_CONFIG["auto_output"]))
         self.output_path_var.set(config.get("output_path", DEFAULT_CONFIG["output_path"]))
-        self.format_var.set(config.get("format", DEFAULT_CONFIG["format"]))
+        configured_format = normalize_format(str(config.get("format", DEFAULT_CONFIG["format"])))
+        self.format_var.set(configured_format if configured_format in SUPPORTED_FORMATS else DEFAULT_CONFIG["format"])
         self.resize_var.set(config.get("resize", DEFAULT_CONFIG["resize"]))
 
         self.size_entry.delete(0, tk.END)
@@ -257,7 +260,7 @@ class ImageCompressorApp:
         threading.Thread(target=self.run_runtime_check, daemon=True).start()
 
     def run_runtime_check(self) -> None:
-        result = self.runtime_manager.ensure_imagemagick_ready(status_callback=self.handle_runtime_status)
+        result = self.runtime_manager.ensure_codecs_ready(status_callback=self.handle_runtime_status)
         self.root.after(0, self.finish_runtime_check, result)
 
     def handle_runtime_status(self, message: str) -> None:
@@ -267,15 +270,16 @@ class ImageCompressorApp:
     def finish_runtime_check(self, result: EnsureResult) -> None:
         self.runtime_result = result
         self.runtime_summary = summarize_runtime_result(result)
-        self.service.magick_path = result.magick_path
+        if result.ready:
+            self.service.set_encoder_paths(result.encoder_paths)
         self.append_log(self.runtime_summary.message)
         self.compress_button.config(
             state="normal" if self.runtime_summary.can_start and not self.is_compressing else "disabled"
         )
 
     def start_compression(self) -> None:
-        if not self.runtime_summary or not self.runtime_summary.can_start or not self.service.magick_path:
-            messagebox.showwarning("提示", "ImageMagick 尚未准备完成，请稍后再试。")
+        if not self.runtime_summary or not self.runtime_summary.can_start or not self.service.encoder_paths:
+            messagebox.showwarning("提示", "编码器尚未准备完成，请稍后再试。")
             return
 
         input_path = self.input_entry.get().strip()
@@ -289,6 +293,9 @@ class ImageCompressorApp:
             target_size = int(target_size_kb) * 1024
         except ValueError:
             messagebox.showerror("错误", "目标大小必须是数字")
+            return
+        if target_size <= 0:
+            messagebox.showerror("错误", "目标大小必须大于 0")
             return
 
         image_files = collect_image_files(input_path)

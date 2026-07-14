@@ -17,6 +17,12 @@ def test_derive_output_path_from_file_path(tmp_path: Path) -> None:
     assert derive_output_path(str(image_path)) == str(tmp_path / "output")
 
 
+def test_derive_output_path_from_avif_path(tmp_path: Path) -> None:
+    image_path = tmp_path / "demo.avif"
+
+    assert derive_output_path(str(image_path)) == str(tmp_path / "output")
+
+
 def test_resolve_app_paths_prefers_program_dir_when_writable(tmp_path: Path) -> None:
     program_dir = tmp_path / "program"
     fallback_dir = tmp_path / "fallback"

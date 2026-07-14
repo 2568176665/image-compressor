@@ -1,0 +1,5 @@
+libavif
+
+The avifenc executable is from the libavif v1.4.1 Windows artifacts.
+Project: https://github.com/AOMediaCodec/libavif
+License: BSD-2-Clause. The upstream license and bundled codec notices are available in the source repository.

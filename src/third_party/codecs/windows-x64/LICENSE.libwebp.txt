@@ -1,0 +1,5 @@
+libwebp
+
+The cwebp executable is from the libwebp 1.6.0 Windows x64 archive.
+Project: https://chromium.googlesource.com/webm/libwebp/
+License: BSD-3-Clause and WebM patent license terms. See the upstream repository for the complete notices.
