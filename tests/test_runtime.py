@@ -77,6 +77,19 @@ def test_validate_codec_resources_detects_tampering(tmp_path: Path) -> None:
         raise AssertionError("tampered resource was accepted")
 
 
+def test_validate_codec_resources_accepts_windows_text_line_endings(tmp_path: Path) -> None:
+    _write_manifest(tmp_path)
+    license_path = tmp_path / "LICENSE.txt"
+    license_path.write_bytes(b"license\r\nline\r\n")
+
+    manifest_path = tmp_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"]["LICENSE.txt"] = hashlib.sha256(b"license\nline\n").hexdigest()
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    validate_codec_resources(tmp_path)
+
+
 def test_runtime_resolves_all_encoders_and_checks_pillow(tmp_path: Path, monkeypatch) -> None:
     _write_manifest(tmp_path)
     manager = CodecRuntimeManager(resource_dir=str(tmp_path))

@@ -270,6 +270,12 @@ class CodecRuntimeManager:
 
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
+    if path.suffix.lower() == ".txt":
+        # 许可证文本需忽略 Windows Git autocrlf 带来的换行差异。
+        content = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+        digest.update(content)
+        return digest.hexdigest()
+
     with path.open("rb") as file_obj:
         for chunk in iter(lambda: file_obj.read(1024 * 1024), b""):
             digest.update(chunk)
