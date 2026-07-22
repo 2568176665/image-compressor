@@ -15,7 +15,7 @@ from .compression import (
     resolve_visual_score,
 )
 from .config import ConfigStore, DEFAULT_CONFIG, derive_output_path
-from .runtime import CodecRuntimeManager, EnsureResult, RuntimeSummary, summarize_runtime_result
+from .runtime import CodecRuntimeManager, EnsureResult
 
 
 class ImageCompressorApp:
@@ -31,7 +31,6 @@ class ImageCompressorApp:
         self.config_store = config_store
         self.runtime_manager = runtime_manager
         self.runtime_result: EnsureResult | None = None
-        self.runtime_summary: RuntimeSummary | None = None
         self.service = CompressionService(encoder_paths=None)
         self.is_compressing = False
 
@@ -285,25 +284,20 @@ class ImageCompressorApp:
         threading.Thread(target=self.run_runtime_check, daemon=True).start()
 
     def run_runtime_check(self) -> None:
-        result = self.runtime_manager.ensure_codecs_ready(status_callback=self.handle_runtime_status)
+        result = self.runtime_manager.ensure_codecs_ready()
         self.root.after(0, self.finish_runtime_check, result)
-
-    def handle_runtime_status(self, message: str) -> None:
-        logging.info(message)
-        self.root.after(0, self.append_log, message)
 
     def finish_runtime_check(self, result: EnsureResult) -> None:
         self.runtime_result = result
-        self.runtime_summary = summarize_runtime_result(result)
         if result.ready:
             self.service.set_encoder_paths(result.encoder_paths, result.metric_path)
-        self.append_log(self.runtime_summary.message)
+        self.append_log(result.message)
         self.compress_button.config(
-            state="normal" if self.runtime_summary.can_start and not self.is_compressing else "disabled"
+            state="normal" if result.ready and not self.is_compressing else "disabled"
         )
 
     def start_compression(self) -> None:
-        if not self.runtime_summary or not self.runtime_summary.can_start or not self.service.encoder_paths:
+        if not self.runtime_result or not self.runtime_result.ready or not self.service.encoder_paths:
             messagebox.showwarning("提示", "编码器尚未准备完成，请稍后再试。")
             return
 
@@ -364,7 +358,7 @@ class ImageCompressorApp:
         max_workers: int,
         min_visual_score: float | None,
     ) -> None:
-        summary = self.service.run_batch(
+        status = self.service.run_batch(
             image_files,
             output_dir=output_path,
             target_size=target_size,
@@ -376,7 +370,7 @@ class ImageCompressorApp:
                 0, self.update_status, completed, total, result.message
             ),
         )
-        self.root.after(0, self.finish_compression, summary.status)
+        self.root.after(0, self.finish_compression, status)
 
     def update_status(self, completed: int, total: int, message: str) -> None:
         self.progress["value"] = completed
@@ -400,7 +394,7 @@ class ImageCompressorApp:
         message = final_messages.get(status, "压缩任务已结束")
         logging.info(message)
         self.append_log(message)
-        if self.runtime_summary and self.runtime_summary.can_start:
+        if self.runtime_result and self.runtime_result.ready:
             self.compress_button.config(state="normal")
         else:
             self.compress_button.config(state="disabled")

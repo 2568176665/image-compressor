@@ -7,8 +7,6 @@ from pathlib import Path
 from imagec.runtime import (
     CODEC_EXECUTABLES,
     CodecRuntimeManager,
-    EnsureResult,
-    summarize_runtime_result,
     validate_codec_resources,
 )
 
@@ -28,37 +26,6 @@ def _write_manifest(root: Path) -> None:
         "files": files,
     }
     (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-
-
-def test_summarize_runtime_result_marks_fatal_failure() -> None:
-    result = EnsureResult(
-        encoder_paths={},
-        versions={},
-        source="none",
-        ready=False,
-        message="missing codecs",
-        fatal=True,
-    )
-
-    summary = summarize_runtime_result(result)
-
-    assert summary.level == "error"
-    assert summary.can_start is False
-
-
-def test_summarize_runtime_result_marks_ready_bundle() -> None:
-    result = EnsureResult(
-        encoder_paths={"jpg": "cjpegli.exe"},
-        versions={"jpg": "0.11.2"},
-        source="bundled",
-        ready=True,
-        message="ready",
-    )
-
-    summary = summarize_runtime_result(result)
-
-    assert summary.level == "info"
-    assert summary.can_start is True
 
 
 def test_validate_codec_resources_detects_tampering(tmp_path: Path) -> None:
@@ -101,7 +68,6 @@ def test_runtime_resolves_all_encoders_and_checks_pillow(tmp_path: Path, monkeyp
     result = manager.ensure_codecs_ready()
 
     assert result.ready is True
-    assert result.source == "bundled"
     assert set(result.encoder_paths) == {"jpg", "png", "oxipng", "webp", "avif"}
     assert set(result.versions) == set(result.encoder_paths)
     assert result.metric_path == str((tmp_path / "ssimulacra2.exe").resolve())
@@ -134,11 +100,10 @@ def test_runtime_fails_when_manifest_is_missing(tmp_path: Path, monkeypatch) -> 
     result = manager.ensure_codecs_ready()
 
     assert result.ready is False
-    assert result.fatal is True
     assert "清单" in result.message
 
 
-def test_runtime_keeps_encoder_ready_log_without_progress_logs(
+def test_runtime_reports_ready_bundle(
     tmp_path: Path, monkeypatch
 ) -> None:
     _write_manifest(tmp_path)
@@ -146,10 +111,7 @@ def test_runtime_keeps_encoder_ready_log_without_progress_logs(
     monkeypatch.setattr(manager, "_is_supported_platform", lambda: True)
     monkeypatch.setattr(manager, "_pillow_supports_avif", lambda: True)
     monkeypatch.setattr(manager, "_get_version", lambda _path: "test-version")
-    messages: list[str] = []
-
-    result = manager.ensure_codecs_ready(status_callback=messages.append)
+    result = manager.ensure_codecs_ready()
 
     assert result.ready is True
-    assert messages == []
     assert result.message.startswith("编码器已就绪:")

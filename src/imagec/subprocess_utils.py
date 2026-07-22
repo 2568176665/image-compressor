@@ -53,15 +53,12 @@ def terminate_process(process: subprocess.Popen[str]) -> None:
 def run_command(
     command: list[str],
     *,
-    cwd: str | None = None,
-    timeout: float | None = None,
     cancel_event: threading.Event | None = None,
     process_registry: ProcessRegistry | None = None,
 ) -> CommandResult:
     creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
     process = subprocess.Popen(
         command,
-        cwd=cwd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -69,7 +66,6 @@ def run_command(
     )
     registry = process_registry or ProcessRegistry()
     registry.register(process)
-    start = time.monotonic()
     try:
         while True:
             if cancel_event and cancel_event.is_set():
@@ -80,15 +76,6 @@ def run_command(
                     stdout=stdout,
                     stderr=stderr,
                     cancelled=True,
-                )
-            if timeout is not None and (time.monotonic() - start) > timeout:
-                terminate_process(process)
-                stdout, stderr = process.communicate()
-                return CommandResult(
-                    returncode=process.returncode or -1,
-                    stdout=stdout,
-                    stderr=(stderr or "") + "\nCommand timed out.",
-                    cancelled=False,
                 )
             if process.poll() is not None:
                 stdout, stderr = process.communicate()

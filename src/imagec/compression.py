@@ -56,14 +56,6 @@ class CompressionResult:
     quality_limited: bool = False
 
 
-@dataclass(slots=True)
-class CompressionSummary:
-    status: str
-    completed: int
-    total: int
-    results: list[CompressionResult]
-
-
 @dataclass(frozen=True, slots=True)
 class TransformPlan:
     resize_value: str | None
@@ -163,10 +155,10 @@ class CompressionService:
         max_workers: int,
         min_visual_score: float | None = None,
         progress_callback: Callable[[int, int, CompressionResult], None] | None = None,
-    ) -> CompressionSummary:
+    ) -> str:
         self.reset()
         completed = 0
-        results: list[CompressionResult] = []
+        has_failure = False
         total = len(image_files)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -187,10 +179,11 @@ class CompressionService:
 
             for future in concurrent.futures.as_completed(futures):
                 result = future.result()
-                results.append(result)
                 if result.status == "cancelled":
                     self.cancel()
                     break
+
+                has_failure |= result.status == "failed"
 
                 completed += 1
                 if progress_callback:
@@ -206,10 +199,10 @@ class CompressionService:
         status = "completed"
         if self.cancel_event.is_set():
             status = "cancelled"
-        elif any(result.status == "failed" for result in results):
+        elif has_failure:
             status = "failed"
 
-        return CompressionSummary(status=status, completed=completed, total=total, results=results)
+        return status
 
     def compress_file(self, request: CompressionRequest) -> CompressionResult:
         if self.cancel_event.is_set():

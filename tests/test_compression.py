@@ -359,7 +359,7 @@ def test_run_batch_reports_cancelled_status(tmp_path: Path) -> None:
 
     service.compress_file = fake_compress  # type: ignore[method-assign]
 
-    summary = service.run_batch(
+    status = service.run_batch(
         files,
         output_dir=str(output_dir),
         target_size=500,
@@ -368,9 +368,7 @@ def test_run_batch_reports_cancelled_status(tmp_path: Path) -> None:
         max_workers=2,
     )
 
-    assert summary.status == "cancelled"
-    assert summary.total == 3
-    assert summary.completed <= 2
+    assert status == "cancelled"
 
 
 def test_cancel_terminates_running_external_process() -> None:

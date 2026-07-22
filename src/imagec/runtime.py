@@ -9,8 +9,6 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
-
 from PIL import features
 
 
@@ -34,31 +32,15 @@ VERSION_PATTERN = re.compile(r"\b(?:v)?(\d+(?:\.\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?
 MANIFEST_FILENAME = "manifest.json"
 PACKAGED_CODEC_RELATIVE_DIR = Path("codecs") / "windows-x64"
 SOURCE_CODEC_RELATIVE_DIR = Path("src") / "third_party" / "codecs" / "windows-x64"
-StatusCallback = Callable[[str], None]
 
 
 @dataclass(slots=True)
 class EnsureResult:
     encoder_paths: dict[str, str]
     versions: dict[str, str]
-    source: str
     ready: bool
     message: str
     metric_path: str | None = None
-    fatal: bool = False
-
-
-@dataclass(slots=True)
-class RuntimeSummary:
-    level: str
-    message: str
-    can_start: bool
-
-
-def summarize_runtime_result(result: EnsureResult) -> RuntimeSummary:
-    if result.fatal or not result.ready:
-        return RuntimeSummary(level="error", message=result.message, can_start=False)
-    return RuntimeSummary(level="info", message=result.message, can_start=True)
 
 
 def get_codec_resource_dir(base_dir: str | Path | None = None) -> Path:
@@ -163,10 +145,7 @@ class CodecRuntimeManager:
         self.base_dir = Path(base_dir or self._get_base_dir())
         self.resource_dir = Path(resource_dir) if resource_dir else None
 
-    def ensure_codecs_ready(
-        self,
-        status_callback: StatusCallback | None = None,
-    ) -> EnsureResult:
+    def ensure_codecs_ready(self) -> EnsureResult:
         if not self._is_supported_platform():
             return self._failure("当前版本仅支持 Windows x64 编码器")
 
@@ -201,14 +180,12 @@ class CodecRuntimeManager:
             encoder_paths=encoder_paths,
             metric_path=metric_path,
             versions=versions,
-            source="bundled",
             ready=True,
             message=(
                 "编码器已就绪: "
                 + ", ".join(f"{name} {version}" for name, version in versions.items())
                 + ("；感知评分已启用" if metric_path else "；未找到感知评分工具，将仅限制文件大小")
             ),
-            fatal=False,
         )
 
     def _get_base_dir(self) -> str:
@@ -279,15 +256,9 @@ class CodecRuntimeManager:
             encoder_paths={},
             metric_path=None,
             versions={},
-            source="none",
             ready=False,
             message=message,
-            fatal=True,
         )
-
-    def _emit(self, callback: StatusCallback | None, message: str) -> None:
-        if callback:
-            callback(message)
 
 
 def _sha256(path: Path) -> str:
