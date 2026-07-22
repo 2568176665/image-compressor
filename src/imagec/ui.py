@@ -362,7 +362,7 @@ class ImageCompressorApp:
         output_format: str,
         resize_value: str | None,
         max_workers: int,
-        min_visual_score: float,
+        min_visual_score: float | None,
     ) -> None:
         summary = self.service.run_batch(
             image_files,

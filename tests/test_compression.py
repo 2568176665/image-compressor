@@ -88,6 +88,7 @@ def test_resolve_max_workers_accepts_user_override(monkeypatch) -> None:
 
 
 def test_resolve_visual_score_uses_presets_and_default() -> None:
+    assert resolve_visual_score("关闭") is None
     assert resolve_visual_score("高质量 (80)") == 80
     assert resolve_visual_score("90") == 90
     assert resolve_visual_score("unexpected") == 85
@@ -260,7 +261,7 @@ def test_visual_mode_selects_smallest_candidate_that_meets_score(tmp_path: Path)
     assert result.output_size == 45_000
     assert result.visual_score == 86.0
     assert result.quality_limited is False
-    assert "SSIMULACRA2 86.0" in result.message
+    assert result.message == "完成: 43.9 KB, 视觉评分 86.0 — source"
 
 
 def test_visual_mode_marks_best_under_limit_when_no_candidate_meets_score(tmp_path: Path) -> None:

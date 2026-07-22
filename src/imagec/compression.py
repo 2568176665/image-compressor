@@ -26,7 +26,8 @@ IMAGE_PATTERNS = tuple(f"*.{suffix}" for suffix in IMAGE_SUFFIXES) + tuple(
 DEFAULT_MAX_WORKERS_CAP = 4
 RESIZE_PATTERN = re.compile(r"^\s*(?P<width>\d*)\s*x\s*(?P<height>\d*)\s*$", re.IGNORECASE)
 PERCENT_PATTERN = re.compile(r"^\s*(?P<percent>\d+(?:\.\d+)?)\s*%\s*$")
-VISUAL_QUALITY_PRESETS = {
+VISUAL_QUALITY_PRESETS: dict[str, float | None] = {
+    "关闭": None,
     "高质量 (80)": 80.0,
     "优质 (85)": 85.0,
     "视觉无损 (90)": 90.0,
@@ -81,7 +82,7 @@ def normalize_format(value: str) -> str:
     return "jpg" if normalized == "jpeg" else normalized
 
 
-def resolve_visual_score(value: str | None) -> float:
+def resolve_visual_score(value: str | None) -> float | None:
     normalized = (value or "").strip()
     if normalized in VISUAL_QUALITY_PRESETS:
         return VISUAL_QUALITY_PRESETS[normalized]
@@ -572,12 +573,12 @@ class CompressionService:
         output_size = output_file.stat().st_size
         details = [f"{output_size / 1024:.1f} KB"]
         if visual_score is not None:
-            details.append(f"SSIMULACRA2 {visual_score:.1f}")
+            details.append(f"视觉评分 {visual_score:.1f}")
         if quality_limited:
             details.append("受大小上限限制")
         return CompressionResult(
             status="completed",
-            message=f"完成: {stem} — {', '.join(details)}",
+            message=f"完成: {', '.join(details)} — {stem}",
             output_file=str(output_file),
             output_size=output_size,
             visual_score=visual_score,
