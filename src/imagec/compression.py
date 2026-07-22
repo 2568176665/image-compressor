@@ -6,6 +6,7 @@ import logging
 import math
 import os
 import re
+import shutil
 import tempfile
 import threading
 from dataclasses import dataclass
@@ -25,6 +26,13 @@ IMAGE_PATTERNS = tuple(f"*.{suffix}" for suffix in IMAGE_SUFFIXES) + tuple(
 DEFAULT_MAX_WORKERS_CAP = 4
 RESIZE_PATTERN = re.compile(r"^\s*(?P<width>\d*)\s*x\s*(?P<height>\d*)\s*$", re.IGNORECASE)
 PERCENT_PATTERN = re.compile(r"^\s*(?P<percent>\d+(?:\.\d+)?)\s*%\s*$")
+VISUAL_QUALITY_PRESETS = {
+    "高质量 (80)": 80.0,
+    "优质 (85)": 85.0,
+    "视觉无损 (90)": 90.0,
+}
+DEFAULT_VISUAL_SCORE = VISUAL_QUALITY_PRESETS["优质 (85)"]
+VISUAL_CANDIDATE_LIMIT = 8
 
 
 @dataclass(slots=True)
@@ -34,6 +42,7 @@ class CompressionRequest:
     target_size: int
     output_format: str
     resize_value: str | None
+    min_visual_score: float | None = None
 
 
 @dataclass(slots=True)
@@ -41,6 +50,9 @@ class CompressionResult:
     status: str
     message: str
     output_file: str | None = None
+    output_size: int | None = None
+    visual_score: float | None = None
+    quality_limited: bool = False
 
 
 @dataclass(slots=True)
@@ -57,9 +69,27 @@ class TransformPlan:
     scale: float | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class VisualCandidate:
+    path: Path
+    size: int
+    score: float
+
+
 def normalize_format(value: str) -> str:
     normalized = value.strip().lower().lstrip(".")
     return "jpg" if normalized == "jpeg" else normalized
+
+
+def resolve_visual_score(value: str | None) -> float:
+    normalized = (value or "").strip()
+    if normalized in VISUAL_QUALITY_PRESETS:
+        return VISUAL_QUALITY_PRESETS[normalized]
+    try:
+        score = float(normalized)
+    except ValueError:
+        return DEFAULT_VISUAL_SCORE
+    return score if score in VISUAL_QUALITY_PRESETS.values() else DEFAULT_VISUAL_SCORE
 
 
 def resolve_max_workers(value: str | None) -> int:
@@ -94,6 +124,7 @@ class CompressionService:
         self,
         *,
         encoder_paths: Mapping[str, str] | None,
+        metric_path: str | None = None,
         command_runner: Callable[..., CommandResult] = run_command,
         process_registry: ProcessRegistry | None = None,
     ) -> None:
@@ -101,15 +132,17 @@ class CompressionService:
             normalize_format(name): str(path)
             for name, path in (encoder_paths or {}).items()
         }
+        self.metric_path = str(metric_path) if metric_path else None
         self.command_runner = command_runner
         self.process_registry = process_registry or ProcessRegistry()
         self.cancel_event = threading.Event()
 
-    def set_encoder_paths(self, encoder_paths: Mapping[str, str]) -> None:
+    def set_encoder_paths(self, encoder_paths: Mapping[str, str], metric_path: str | None = None) -> None:
         self.encoder_paths = {
             normalize_format(name): str(path)
             for name, path in encoder_paths.items()
         }
+        self.metric_path = str(metric_path) if metric_path else None
 
     def cancel(self) -> None:
         self.cancel_event.set()
@@ -127,6 +160,7 @@ class CompressionService:
         output_format: str,
         resize_value: str | None,
         max_workers: int,
+        min_visual_score: float | None = None,
         progress_callback: Callable[[int, int, CompressionResult], None] | None = None,
     ) -> CompressionSummary:
         self.reset()
@@ -144,6 +178,7 @@ class CompressionService:
                         target_size=target_size,
                         output_format=output_format,
                         resize_value=resize_value,
+                        min_visual_score=min_visual_score,
                     ),
                 )
                 for image_file in image_files
@@ -229,6 +264,32 @@ class CompressionService:
                         logging.error("生成临时 PNG 失败: %s", error)
                         continue
 
+                    if request.min_visual_score is not None and self.metric_path:
+                        visual_candidate = self._select_visual_candidate(
+                            source_png,
+                            temp_root,
+                            output_format,
+                            request.target_size,
+                            request.min_visual_score,
+                        )
+                        if self.cancel_event.is_set():
+                            return CompressionResult(status="cancelled", message="压缩已取消")
+                        if visual_candidate:
+                            try:
+                                os.replace(visual_candidate.path, output_file)
+                            except OSError as error:
+                                logging.error("保存输出文件失败: %s", error)
+                                return CompressionResult(
+                                    status="failed",
+                                    message=f"失败: {input_path.stem} (无法保存输出文件)",
+                                )
+                            return self._completed_result(
+                                input_path.stem,
+                                output_file,
+                                visual_candidate.score,
+                                quality_limited=visual_candidate.score < request.min_visual_score,
+                            )
+
                     try:
                         result = self._encode(
                             source_png,
@@ -248,6 +309,12 @@ class CompressionService:
                     if result.status != "completed":
                         continue
 
+                    visual_score = None
+                    quality_limited = False
+                    if request.min_visual_score is not None and self.metric_path:
+                        visual_score = self._score_candidate(source_png, candidate_output)
+                        quality_limited = visual_score is None or visual_score < request.min_visual_score
+
                     try:
                         os.replace(candidate_output, output_file)
                     except OSError as error:
@@ -256,10 +323,11 @@ class CompressionService:
                             status="failed",
                             message=f"失败: {input_path.stem} (无法保存输出文件)",
                         )
-                    return CompressionResult(
-                        status="completed",
-                        message=f"完成: {input_path.stem}",
-                        output_file=str(output_file),
+                    return self._completed_result(
+                        input_path.stem,
+                        output_file,
+                        visual_score,
+                        quality_limited=quality_limited,
                     )
         finally:
             base_image.close()
@@ -336,6 +404,185 @@ class CompressionService:
             return image.convert("RGB")
 
         raise ValueError(f"unsupported format: {output_format}")
+
+    def _select_visual_candidate(
+        self,
+        source_png: Path,
+        temp_root: Path,
+        output_format: str,
+        target_size: int,
+        min_visual_score: float,
+    ) -> VisualCandidate | None:
+        candidates: list[VisualCandidate] = []
+        for index, quality in enumerate(self._visual_quality_levels(output_format)[:VISUAL_CANDIDATE_LIMIT]):
+            if self.cancel_event.is_set():
+                return None
+            candidate_path = temp_root / f"visual-{index}.{output_format}"
+            candidate_path.unlink(missing_ok=True)
+            if not self._encode_at_quality(source_png, candidate_path, output_format, quality):
+                continue
+            if not self._is_valid_image(candidate_path):
+                candidate_path.unlink(missing_ok=True)
+                continue
+            score = self._score_candidate(source_png, candidate_path)
+            if score is None:
+                logging.warning("感知评分失败，回退到仅限制文件大小的压缩模式")
+                return None
+            candidates.append(
+                VisualCandidate(path=candidate_path, size=candidate_path.stat().st_size, score=score)
+            )
+
+        eligible = [
+            candidate
+            for candidate in candidates
+            if candidate.size <= target_size and candidate.score >= min_visual_score
+        ]
+        if eligible:
+            return min(eligible, key=lambda candidate: candidate.size)
+
+        limited = [candidate for candidate in candidates if candidate.size <= target_size]
+        if limited:
+            return max(limited, key=lambda candidate: (candidate.score, -candidate.size))
+        return None
+
+    def _visual_quality_levels(self, output_format: str) -> tuple[float | None, ...]:
+        if output_format == "jpg":
+            return (0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0)
+        if output_format in {"webp", "avif"}:
+            return (95, 90, 85, 80, 75, 70, 65, 60)
+        if output_format == "png":
+            return (None, 95, 90, 85, 80, 75, 70, 65)
+        raise ValueError(f"unsupported format: {output_format}")
+
+    def _encode_at_quality(
+        self,
+        source_png: Path,
+        output_file: Path,
+        output_format: str,
+        quality: float | None,
+    ) -> bool:
+        encoder = self.encoder_paths[output_format]
+        if output_format == "png":
+            if quality is None:
+                shutil.copyfile(source_png, output_file)
+                oxipng_path = self.encoder_paths.get("oxipng")
+                if not oxipng_path:
+                    return False
+                command = [oxipng_path, "-o", "2", "--strip", "all", "--force", str(output_file)]
+            else:
+                command = [
+                    encoder,
+                    f"--quality={int(quality)}-100",
+                    "--speed",
+                    "4",
+                    "--strip",
+                    "--force",
+                    "--output",
+                    str(output_file),
+                    str(source_png),
+                ]
+        elif output_format == "jpg":
+            command = [
+                encoder,
+                str(source_png),
+                str(output_file),
+                "--distance",
+                str(quality),
+                "--quiet",
+            ]
+        elif output_format == "webp":
+            command = [
+                encoder,
+                "-quiet",
+                "-m",
+                "6",
+                "-q",
+                str(quality),
+                "-alpha_q",
+                "100",
+                "-af",
+                "-sharp_yuv",
+                str(source_png),
+                "-o",
+                str(output_file),
+            ]
+        elif output_format == "avif":
+            command = [
+                encoder,
+                "--speed",
+                "6",
+                "--jobs",
+                "1",
+                "--qcolor",
+                str(int(quality)),
+                "--qalpha",
+                "100",
+                str(source_png),
+                str(output_file),
+            ]
+        else:  # pragma: no cover - guarded by SUPPORTED_FORMATS
+            return False
+
+        result = self._run_command(command)
+        return not result.cancelled and result.returncode == 0 and output_file.exists()
+
+    def _score_candidate(self, source_png: Path, candidate_path: Path) -> float | None:
+        if not self.metric_path:
+            return None
+        comparison_path = candidate_path.with_name(f"{candidate_path.name}.score.png")
+        try:
+            with Image.open(source_png) as source, Image.open(candidate_path) as candidate:
+                source.load()
+                candidate.load()
+                mode = "RGBA" if "A" in source.getbands() else "RGB"
+                normalized = candidate.convert(mode)
+                try:
+                    normalized.save(comparison_path, format="PNG", optimize=False)
+                finally:
+                    normalized.close()
+        except (OSError, ValueError, SyntaxError):
+            comparison_path.unlink(missing_ok=True)
+            return None
+
+        result = self._run_command([self.metric_path, str(source_png), str(comparison_path)])
+        comparison_path.unlink(missing_ok=True)
+        if result.cancelled or result.returncode != 0:
+            return None
+        match = re.search(r"(?m)^\s*(-?(?:\d+\.?\d*|\.\d+))\s*$", result.stdout)
+        if not match:
+            return None
+        return float(match.group(1))
+
+    def _is_valid_image(self, output_file: Path) -> bool:
+        try:
+            with Image.open(output_file) as image:
+                image.load()
+        except (OSError, ValueError, SyntaxError):
+            return False
+        return True
+
+    def _completed_result(
+        self,
+        stem: str,
+        output_file: Path,
+        visual_score: float | None,
+        *,
+        quality_limited: bool,
+    ) -> CompressionResult:
+        output_size = output_file.stat().st_size
+        details = [f"{output_size / 1024:.1f} KB"]
+        if visual_score is not None:
+            details.append(f"SSIMULACRA2 {visual_score:.1f}")
+        if quality_limited:
+            details.append("受大小上限限制")
+        return CompressionResult(
+            status="completed",
+            message=f"完成: {stem} — {', '.join(details)}",
+            output_file=str(output_file),
+            output_size=output_size,
+            visual_score=visual_score,
+            quality_limited=quality_limited,
+        )
 
     def _encode(
         self,

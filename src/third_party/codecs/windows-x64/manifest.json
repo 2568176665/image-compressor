@@ -2,6 +2,7 @@
   "platform": "windows-x64",
   "versions": {
     "cjpegli.exe": "libjxl 0.11.2",
+    "ssimulacra2.exe": "libjxl 0.11.2",
     "pngquant.exe": "pngquant 3.0.3",
     "oxipng.exe": "oxipng 10.1.1",
     "cwebp.exe": "libwebp 1.6.0",
@@ -13,6 +14,9 @@
     "oxipng": "oxipng.exe",
     "webp": "cwebp.exe",
     "avif": "avifenc.exe"
+  },
+  "metrics": {
+    "ssimulacra2": "ssimulacra2.exe"
   },
   "files": {
     "avifenc.exe": "c334ccca6d78dd79b8a7387c13ff54bbf09287335f99b5f1a609ea9f965c6f07",
@@ -41,6 +45,7 @@
     "libpng16-16.dll": "5c1dd5410af563f4a3c4aee10d1f749aa71e0d7fb3b4fac240eb9e96cadebd26",
     "oxipng.exe": "56e29d2bc4a3a6af911f2168b20d5a911cb808fa291579d974549a9e24ee5748",
     "pngquant.exe": "540eed3a181401f3cd3f0cfc63f8ec3655a3d8b93b05c9333426f8e1e2193b3f",
+    "ssimulacra2.exe": "08a44e2d4cd44098695dbe47cdec1f0ba7c68bf9f0389b5785133d81e9b25fed",
     "zlib1.dll": "11cd91171765cd65f1c3362e3df67e5f5a618a6b88c8cdec899b802eaf1c7b0d"
   }
 }

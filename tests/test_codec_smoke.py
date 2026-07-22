@@ -20,7 +20,10 @@ def test_bundled_codecs_smoke_with_rgb_alpha_and_avif_input(tmp_path: Path) -> N
     runtime_result = CodecRuntimeManager(resource_dir=str(RESOURCE_DIR)).ensure_codecs_ready()
     assert runtime_result.ready is True
 
-    service = CompressionService(encoder_paths=runtime_result.encoder_paths)
+    service = CompressionService(
+        encoder_paths=runtime_result.encoder_paths,
+        metric_path=runtime_result.metric_path,
+    )
     rgb = tmp_path / "rgb.png"
     transparent = tmp_path / "transparent.png"
     avif = tmp_path / "input.avif"
@@ -38,10 +41,12 @@ def test_bundled_codecs_smoke_with_rgb_alpha_and_avif_input(tmp_path: Path) -> N
                     target_size=50_000,
                     output_format=output_format,
                     resize_value=None,
+                    min_visual_score=85,
                 )
             )
             assert result.status == "completed", result.message
             output = Path(result.output_file)
             assert output.stat().st_size <= 50_000
+            assert result.visual_score is not None
             with Image.open(output) as encoded:
                 encoded.load()

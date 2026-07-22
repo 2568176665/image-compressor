@@ -21,6 +21,7 @@ DEFAULT_CONFIG = {
     "resize_width": "",
     "resize_height": "",
     "format": "jpg",
+    "visual_quality": "优质 (85)",
     "max_workers": "0",
 }
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".avif"}

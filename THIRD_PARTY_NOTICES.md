@@ -1,10 +1,10 @@
 # 第三方编码器声明
 
-Windows x64 发布包内置以下命令行编码器。许可证文件和运行时 DLL 位于 `src/third_party/codecs/windows-x64/`，构建时会一并复制到发布包。
+Windows x64 发布包内置以下命令行编码器和感知评分工具。许可证文件和运行时 DLL 位于 `src/third_party/codecs/windows-x64/`，构建时会一并复制到发布包。
 
 | 组件 | 固定版本 | 用途 | 来源与许可证 |
 | --- | --- | --- | --- |
-| Jpegli / libjxl `cjpegli` | libjxl v0.11.2 | JPEG | [libjxl](https://github.com/libjxl/libjxl)，BSD-3-Clause；静态包依赖的许可证也随包保留 |
+| Jpegli / libjxl `cjpegli`、`ssimulacra2` | libjxl v0.11.2 | JPEG 编码、感知质量评分 | [libjxl](https://github.com/libjxl/libjxl)，BSD-3-Clause；静态包依赖的许可证也随包保留 |
 | pngquant | 3.0.3 | PNG 有损调色板量化 | [pngquant](https://pngquant.org/)，GPL-3.0-or-later 或商业授权；发布前必须满足对应授权 |
 | `liblcms2-2.dll` | Little CMS 2.19.1 | pngquant 运行时依赖 | [Little CMS](https://github.com/mm2/Little-CMS)，MIT |
 | `libpng16-16.dll` / `zlib1.dll` | libpng 1.6.58 / zlib 1.3.2 | pngquant 运行时依赖 | libpng 自定义许可 / zlib 许可 |

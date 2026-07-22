@@ -5,7 +5,15 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from .compression import SUPPORTED_FORMATS, CompressionService, collect_image_files, normalize_format, resolve_max_workers
+from .compression import (
+    SUPPORTED_FORMATS,
+    VISUAL_QUALITY_PRESETS,
+    CompressionService,
+    collect_image_files,
+    normalize_format,
+    resolve_max_workers,
+    resolve_visual_score,
+)
 from .config import ConfigStore, DEFAULT_CONFIG, derive_output_path
 from .runtime import CodecRuntimeManager, EnsureResult, RuntimeSummary, summarize_runtime_result
 
@@ -14,7 +22,7 @@ class ImageCompressorApp:
     def __init__(self, root: tk.Tk, *, config_store: ConfigStore, runtime_manager: CodecRuntimeManager):
         self.root = root
         self.root.title("图片压缩工具")
-        self.root.geometry("600x460")
+        self.root.geometry("600x490")
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.grid_columnconfigure(0, weight=1)
@@ -32,6 +40,7 @@ class ImageCompressorApp:
         self.output_path_var = tk.StringVar()
         self.resize_var = tk.StringVar(value=DEFAULT_CONFIG["resize"])
         self.format_var = tk.StringVar(value=DEFAULT_CONFIG["format"])
+        self.visual_quality_var = tk.StringVar(value=DEFAULT_CONFIG["visual_quality"])
 
         self.build_ui()
         self.bind_events()
@@ -44,7 +53,7 @@ class ImageCompressorApp:
         main_frame.grid(row=0, column=0, sticky="nsew")
         main_frame.grid_columnconfigure(1, weight=1)
         main_frame.grid_columnconfigure(3, weight=1)
-        main_frame.grid_rowconfigure(7, weight=1)
+        main_frame.grid_rowconfigure(8, weight=1)
 
         field_width = 18
         button_width = 10
@@ -83,7 +92,7 @@ class ImageCompressorApp:
         )
         self.output_button.grid(row=0, column=1)
 
-        tk.Label(main_frame, text="目标大小 (KB):").grid(row=2, column=0, padx=(0, 8), pady=row_padding, sticky="e")
+        tk.Label(main_frame, text="最大大小 (KB):").grid(row=2, column=0, padx=(0, 8), pady=row_padding, sticky="e")
         self.size_entry = tk.Entry(main_frame, width=field_width)
         self.size_entry.grid(row=2, column=1, pady=row_padding, sticky="ew")
 
@@ -125,8 +134,17 @@ class ImageCompressorApp:
         self.max_workers_entry = tk.Entry(main_frame, width=field_width)
         self.max_workers_entry.grid(row=3, column=3, pady=row_padding, sticky="ew")
 
+        tk.Label(main_frame, text="视觉质量:").grid(row=4, column=0, padx=(0, 8), pady=row_padding, sticky="e")
+        ttk.Combobox(
+            main_frame,
+            textvariable=self.visual_quality_var,
+            values=list(VISUAL_QUALITY_PRESETS),
+            state="readonly",
+            width=field_width,
+        ).grid(row=4, column=1, pady=row_padding, sticky="ew")
+
         compress_button_frame = tk.Frame(main_frame)
-        compress_button_frame.grid(row=4, column=0, columnspan=4, pady=(10, 8), sticky="ew")
+        compress_button_frame.grid(row=5, column=0, columnspan=4, pady=(10, 8), sticky="ew")
         compress_button_frame.grid_columnconfigure(0, weight=3)
         compress_button_frame.grid_columnconfigure(1, weight=1)
 
@@ -152,11 +170,11 @@ class ImageCompressorApp:
         self.cancel_button.grid(row=0, column=1, sticky="ew", padx=(4, 0))
 
         self.progress = ttk.Progressbar(main_frame, orient="horizontal", mode="determinate")
-        self.progress.grid(row=5, column=0, columnspan=4, pady=(0, 8), sticky="ew")
+        self.progress.grid(row=6, column=0, columnspan=4, pady=(0, 8), sticky="ew")
 
-        tk.Label(main_frame, text="日志:").grid(row=6, column=0, padx=(0, 8), pady=(2, 4), sticky="nw")
+        tk.Label(main_frame, text="日志:").grid(row=7, column=0, padx=(0, 8), pady=(2, 4), sticky="nw")
         self.log_text = tk.Text(main_frame, height=7, state="disabled", wrap="word")
-        self.log_text.grid(row=7, column=0, columnspan=4, sticky="nsew")
+        self.log_text.grid(row=8, column=0, columnspan=4, sticky="nsew")
         self.refresh_auto_output_button()
 
     def bind_events(self) -> None:
@@ -230,6 +248,12 @@ class ImageCompressorApp:
         configured_format = normalize_format(str(config.get("format", DEFAULT_CONFIG["format"])))
         self.format_var.set(configured_format if configured_format in SUPPORTED_FORMATS else DEFAULT_CONFIG["format"])
         self.resize_var.set(config.get("resize", DEFAULT_CONFIG["resize"]))
+        configured_visual_quality = str(config.get("visual_quality", DEFAULT_CONFIG["visual_quality"]))
+        self.visual_quality_var.set(
+            configured_visual_quality
+            if configured_visual_quality in VISUAL_QUALITY_PRESETS
+            else DEFAULT_CONFIG["visual_quality"]
+        )
 
         self.size_entry.delete(0, tk.END)
         self.size_entry.insert(0, config.get("target_size_kb", DEFAULT_CONFIG["target_size_kb"]))
@@ -251,6 +275,7 @@ class ImageCompressorApp:
                 "resize_width": self.width_entry.get(),
                 "resize_height": self.height_entry.get(),
                 "format": self.format_var.get(),
+                "visual_quality": self.visual_quality_var.get(),
                 "max_workers": self.max_workers_entry.get(),
             }
         )
@@ -271,7 +296,7 @@ class ImageCompressorApp:
         self.runtime_result = result
         self.runtime_summary = summarize_runtime_result(result)
         if result.ready:
-            self.service.set_encoder_paths(result.encoder_paths)
+            self.service.set_encoder_paths(result.encoder_paths, result.metric_path)
         self.append_log(self.runtime_summary.message)
         self.compress_button.config(
             state="normal" if self.runtime_summary.can_start and not self.is_compressing else "disabled"
@@ -317,7 +342,15 @@ class ImageCompressorApp:
 
         threading.Thread(
             target=self.run_tasks,
-            args=(image_files, output_path, target_size, self.format_var.get(), self.get_resize_value(), max_workers),
+            args=(
+                image_files,
+                output_path,
+                target_size,
+                self.format_var.get(),
+                self.get_resize_value(),
+                max_workers,
+                resolve_visual_score(self.visual_quality_var.get()),
+            ),
             daemon=True,
         ).start()
 
@@ -329,6 +362,7 @@ class ImageCompressorApp:
         output_format: str,
         resize_value: str | None,
         max_workers: int,
+        min_visual_score: float,
     ) -> None:
         summary = self.service.run_batch(
             image_files,
@@ -337,6 +371,7 @@ class ImageCompressorApp:
             output_format=output_format,
             resize_value=resize_value,
             max_workers=max_workers,
+            min_visual_score=min_visual_score,
             progress_callback=lambda completed, total, result: self.root.after(
                 0, self.update_status, completed, total, result.message
             ),

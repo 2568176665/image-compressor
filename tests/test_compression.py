@@ -16,6 +16,7 @@ from imagec.compression import (
     TransformPlan,
     collect_image_files,
     resolve_max_workers,
+    resolve_visual_score,
 )
 from imagec.subprocess_utils import CommandResult, ProcessRegistry, run_command
 
@@ -84,6 +85,12 @@ def test_resolve_max_workers_accepts_user_override(monkeypatch) -> None:
     monkeypatch.setattr("imagec.compression.os.cpu_count", lambda: 2)
 
     assert resolve_max_workers("9") == 9
+
+
+def test_resolve_visual_score_uses_presets_and_default() -> None:
+    assert resolve_visual_score("高质量 (80)") == 80
+    assert resolve_visual_score("90") == 90
+    assert resolve_visual_score("unexpected") == 85
 
 
 def test_collect_image_files_includes_avif_and_is_case_insensitive(tmp_path: Path) -> None:
@@ -222,6 +229,79 @@ def test_resize_retry_keeps_final_output_within_target(tmp_path: Path) -> None:
     assert result.status == "completed"
     assert len(calls) >= 2
     assert Path(result.output_file).stat().st_size <= 500
+
+
+def test_visual_mode_selects_smallest_candidate_that_meets_score(tmp_path: Path) -> None:
+    source = tmp_path / "source.png"
+    _write_image(source)
+    service = _service([])
+    service.metric_path = "ssimulacra2.exe"
+    sizes = {0.5: 99_000, 1.0: 72_000, 1.5: 45_000, 2.0: 40_000, 2.5: 35_000, 3.0: 30_000, 4.0: 25_000, 5.0: 20_000}
+    scores = {0.5: 96.0, 1.0: 91.0, 1.5: 86.0, 2.0: 84.0, 2.5: 80.0, 3.0: 76.0, 4.0: 70.0, 5.0: 60.0}
+
+    def encode_at_quality(_source: Path, output: Path, _format: str, quality: float | None) -> bool:
+        image = Image.new("RGB", (64, 48), (40, 120, 220))
+        image.save(output, format="JPEG", quality=95)
+        image.close()
+        output.write_bytes(output.read_bytes() + b"x" * (sizes[quality] - output.stat().st_size))
+        return True
+
+    service._encode_at_quality = encode_at_quality  # type: ignore[method-assign]
+    quality_by_index = (0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0)
+    service._score_candidate = lambda _source, candidate: scores[
+        quality_by_index[int(candidate.stem.split("-")[-1])]
+    ]  # type: ignore[method-assign]
+
+    result = service.compress_file(
+        CompressionRequest(str(source), str(tmp_path / "out"), 100_000, "jpg", None, 85)
+    )
+
+    assert result.status == "completed"
+    assert result.output_size == 45_000
+    assert result.visual_score == 86.0
+    assert result.quality_limited is False
+    assert "SSIMULACRA2 86.0" in result.message
+
+
+def test_visual_mode_marks_best_under_limit_when_no_candidate_meets_score(tmp_path: Path) -> None:
+    source = tmp_path / "source.png"
+    _write_image(source)
+    service = _service([])
+    service.metric_path = "ssimulacra2.exe"
+
+    def encode_at_quality(_source: Path, output: Path, _format: str, quality: float | None) -> bool:
+        image = Image.new("RGB", (64, 48), (40, 120, 220))
+        image.save(output, format="JPEG", quality=95)
+        image.close()
+        output.write_bytes(output.read_bytes() + b"x" * (48_000 - output.stat().st_size))
+        return True
+
+    service._encode_at_quality = encode_at_quality  # type: ignore[method-assign]
+    service._score_candidate = lambda _source, _candidate: 84.0  # type: ignore[method-assign]
+
+    result = service.compress_file(
+        CompressionRequest(str(source), str(tmp_path / "out"), 50_000, "jpg", None, 85)
+    )
+
+    assert result.status == "completed"
+    assert result.visual_score == 84.0
+    assert result.quality_limited is True
+    assert "受大小上限限制" in result.message
+
+
+def test_visual_mode_falls_back_to_target_size_when_metric_cannot_score(tmp_path: Path) -> None:
+    source = tmp_path / "source.png"
+    _write_image(source)
+    calls: list[list[str]] = []
+    service = _service(calls)
+    service.metric_path = "ssimulacra2.exe"
+
+    result = service.compress_file(
+        CompressionRequest(str(source), str(tmp_path / "out"), 20_000, "jpg", None, 85)
+    )
+
+    assert result.status == "completed"
+    assert any("--target_size" in command for command in calls)
 
 
 def test_failed_encoding_cleans_temporary_output_and_does_not_create_final_file(tmp_path: Path) -> None:

@@ -95,3 +95,4 @@ def test_config_store_uses_defaults_when_file_missing(tmp_path: Path) -> None:
 
     assert loaded["target_size_kb"] == "100"
     assert loaded["format"] == "jpg"
+    assert loaded["visual_quality"] == "优质 (85)"

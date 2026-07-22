@@ -15,7 +15,7 @@ from imagec.runtime import (
 
 def _write_manifest(root: Path) -> None:
     files: dict[str, str] = {}
-    for executable in sorted(set(CODEC_EXECUTABLES.values())):
+    for executable in sorted({*CODEC_EXECUTABLES.values(), "ssimulacra2.exe"}):
         path = root / executable
         path.write_bytes(executable.encode("ascii"))
         files[executable] = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -24,6 +24,7 @@ def _write_manifest(root: Path) -> None:
     manifest = {
         "platform": "windows-x64",
         "encoders": CODEC_EXECUTABLES,
+        "metrics": {"ssimulacra2": "ssimulacra2.exe"},
         "files": files,
     }
     (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -103,6 +104,27 @@ def test_runtime_resolves_all_encoders_and_checks_pillow(tmp_path: Path, monkeyp
     assert result.source == "bundled"
     assert set(result.encoder_paths) == {"jpg", "png", "oxipng", "webp", "avif"}
     assert set(result.versions) == set(result.encoder_paths)
+    assert result.metric_path == str((tmp_path / "ssimulacra2.exe").resolve())
+
+
+def test_runtime_allows_older_bundle_without_visual_metric(tmp_path: Path, monkeypatch) -> None:
+    _write_manifest(tmp_path)
+    manifest_path = tmp_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.pop("metrics")
+    manifest["files"].pop("ssimulacra2.exe")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    manager = CodecRuntimeManager(resource_dir=str(tmp_path))
+    monkeypatch.setattr(manager, "_is_supported_platform", lambda: True)
+    monkeypatch.setattr(manager, "_pillow_supports_avif", lambda: True)
+    monkeypatch.setattr(manager, "_get_version", lambda _path: "test-version")
+
+    result = manager.ensure_codecs_ready()
+
+    assert result.ready is True
+    assert result.metric_path is None
+    assert "仅限制文件大小" in result.message
 
 
 def test_runtime_fails_when_manifest_is_missing(tmp_path: Path, monkeypatch) -> None:
