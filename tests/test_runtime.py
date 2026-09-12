@@ -69,7 +69,6 @@ def test_runtime_resolves_all_encoders_and_checks_pillow(tmp_path: Path, monkeyp
 
     assert result.ready is True
     assert set(result.encoder_paths) == {"jpg", "png", "oxipng", "webp", "avif"}
-    assert set(result.versions) == set(result.encoder_paths)
     assert result.metric_path == str((tmp_path / "ssimulacra2.exe").resolve())
 
 

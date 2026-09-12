@@ -18,7 +18,7 @@ from imagec.compression import (
     resolve_max_workers,
     resolve_visual_score,
 )
-from imagec.subprocess_utils import CommandResult, ProcessRegistry, run_command
+from imagec.subprocess_utils import CommandResult, run_command
 
 
 def _write_image(path: Path, *, mode: str = "RGB", size: tuple[int, int] = (64, 48)) -> None:
@@ -90,8 +90,9 @@ def test_resolve_max_workers_accepts_user_override(monkeypatch) -> None:
 def test_resolve_visual_score_uses_presets_and_default() -> None:
     assert resolve_visual_score("关闭") is None
     assert resolve_visual_score("高质量 (80)") == 80
-    assert resolve_visual_score("90") == 90
+    assert resolve_visual_score("视觉无损 (90)") == 90
     assert resolve_visual_score("unexpected") == 85
+    assert resolve_visual_score(None) == 85
 
 
 def test_collect_image_files_includes_avif_and_is_case_insensitive(tmp_path: Path) -> None:
@@ -133,7 +134,9 @@ def test_jpeg_encoder_command_and_transparent_pixels_use_white_background(tmp_pa
         output_path = Path(command[2])
         with Image.open(source_png) as prepared:
             assert prepared.mode == "RGB"
-            red, green, blue = prepared.getpixel((0, 0))
+            pixel = prepared.getpixel((0, 0))
+            assert isinstance(pixel, tuple)
+            red, green, blue = pixel
             assert red > 140 and green > 180 and blue > 230
             prepared.save(output_path, format="JPEG")
         return CommandResult(returncode=0, stdout="", stderr="", cancelled=False)
@@ -147,6 +150,7 @@ def test_jpeg_encoder_command_and_transparent_pixels_use_white_background(tmp_pa
     assert calls[0][0] == "cjpegli.exe"
     assert output_dir in Path(calls[0][1]).parents
     assert "--target_size" in calls[0]
+    assert result.output_file is not None
     assert Path(result.output_file).suffix == ".jpg"
 
 
@@ -163,6 +167,7 @@ def test_webp_and_avif_encoder_commands_have_target_size_options(tmp_path: Path)
 
         assert result.status == "completed"
         assert expected_flag in calls[0]
+        assert result.output_file is not None
         assert Path(result.output_file).suffix == f".{output_format}"
 
 
@@ -229,6 +234,7 @@ def test_resize_retry_keeps_final_output_within_target(tmp_path: Path) -> None:
 
     assert result.status == "completed"
     assert len(calls) >= 2
+    assert result.output_file is not None
     assert Path(result.output_file).stat().st_size <= 500
 
 
@@ -241,17 +247,18 @@ def test_visual_mode_selects_smallest_candidate_that_meets_score(tmp_path: Path)
     scores = {0.5: 96.0, 1.0: 91.0, 1.5: 86.0, 2.0: 84.0, 2.5: 80.0, 3.0: 76.0, 4.0: 70.0, 5.0: 60.0}
 
     def encode_at_quality(_source: Path, output: Path, _format: str, quality: float | None) -> bool:
+        assert quality is not None
         image = Image.new("RGB", (64, 48), (40, 120, 220))
         image.save(output, format="JPEG", quality=95)
         image.close()
         output.write_bytes(output.read_bytes() + b"x" * (sizes[quality] - output.stat().st_size))
         return True
 
-    service._encode_at_quality = encode_at_quality  # type: ignore[method-assign]
+    service._encode_at_quality = encode_at_quality  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
     quality_by_index = (0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0)
-    service._score_candidate = lambda _source, candidate: scores[
+    service._score_candidate = lambda _source, candidate: scores[  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
         quality_by_index[int(candidate.stem.split("-")[-1])]
-    ]  # type: ignore[method-assign]
+    ]
 
     result = service.compress_file(
         CompressionRequest(str(source), str(tmp_path / "out"), 100_000, "jpg", None, 85)
@@ -277,8 +284,8 @@ def test_visual_mode_marks_best_under_limit_when_no_candidate_meets_score(tmp_pa
         output.write_bytes(output.read_bytes() + b"x" * (48_000 - output.stat().st_size))
         return True
 
-    service._encode_at_quality = encode_at_quality  # type: ignore[method-assign]
-    service._score_candidate = lambda _source, _candidate: 84.0  # type: ignore[method-assign]
+    service._encode_at_quality = encode_at_quality  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    service._score_candidate = lambda _source, _candidate: 84.0  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
 
     result = service.compress_file(
         CompressionRequest(str(source), str(tmp_path / "out"), 50_000, "jpg", None, 85)
@@ -357,7 +364,7 @@ def test_run_batch_reports_cancelled_status(tmp_path: Path) -> None:
             service.cancel()
         return CompressionResult(status="completed", message=Path(request.input_file).name)
 
-    service.compress_file = fake_compress  # type: ignore[method-assign]
+    service.compress_file = fake_compress  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
 
     status = service.run_batch(
         files,
@@ -372,7 +379,6 @@ def test_run_batch_reports_cancelled_status(tmp_path: Path) -> None:
 
 
 def test_cancel_terminates_running_external_process() -> None:
-    registry = ProcessRegistry()
     cancel_event = threading.Event()
     result_holder: dict[str, CommandResult] = {}
 
@@ -380,18 +386,14 @@ def test_cancel_terminates_running_external_process() -> None:
         result_holder["result"] = run_command(
             [sys.executable, "-c", "import time; time.sleep(30)"],
             cancel_event=cancel_event,
-            process_registry=registry,
         )
 
     worker = threading.Thread(target=run)
     worker.start()
-    deadline = time.monotonic() + 5
-    while not registry.snapshot() and time.monotonic() < deadline:
-        time.sleep(0.02)
+    time.sleep(0.5)
 
     cancel_event.set()
     worker.join(timeout=5)
 
     assert not worker.is_alive()
     assert result_holder["result"].cancelled is True
-    assert registry.snapshot() == []

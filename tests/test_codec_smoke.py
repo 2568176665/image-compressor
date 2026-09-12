@@ -45,6 +45,7 @@ def test_bundled_codecs_smoke_with_rgb_alpha_and_avif_input(tmp_path: Path) -> N
                 )
             )
             assert result.status == "completed", result.message
+            assert result.output_file is not None
             output = Path(result.output_file)
             assert output.stat().st_size <= 50_000
             assert result.visual_score is not None

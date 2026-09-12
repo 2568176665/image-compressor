@@ -7,12 +7,13 @@ from tkinter import filedialog, messagebox, ttk
 
 from .compression import (
     SUPPORTED_FORMATS,
+    DEFAULT_VISUAL_SCORE,
     VISUAL_QUALITY_PRESETS,
+    CompressionResult,
     CompressionService,
     collect_image_files,
     normalize_format,
     resolve_max_workers,
-    resolve_visual_score,
 )
 from .config import ConfigStore, DEFAULT_CONFIG, derive_output_path
 from .runtime import CodecRuntimeManager, EnsureResult
@@ -22,7 +23,7 @@ class ImageCompressorApp:
     def __init__(self, root: tk.Tk, *, config_store: ConfigStore, runtime_manager: CodecRuntimeManager):
         self.root = root
         self.root.title("图片压缩工具")
-        self.root.geometry("600x490")
+        self.root.geometry("600x430")
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.grid_columnconfigure(0, weight=1)
@@ -35,11 +36,10 @@ class ImageCompressorApp:
         self.is_compressing = False
 
         self.auto_output_var = tk.BooleanVar(value=True)
-        self.input_path_var = tk.StringVar(value=DEFAULT_CONFIG["input_path"])
+        self.input_path_var = tk.StringVar(value=str(DEFAULT_CONFIG["input_path"]))
         self.output_path_var = tk.StringVar()
-        self.resize_var = tk.StringVar(value=DEFAULT_CONFIG["resize"])
-        self.format_var = tk.StringVar(value=DEFAULT_CONFIG["format"])
-        self.visual_quality_var = tk.StringVar(value=DEFAULT_CONFIG["visual_quality"])
+        self.format_var = tk.StringVar(value=str(DEFAULT_CONFIG["format"]))
+        self.visual_quality_var = tk.StringVar(value=str(DEFAULT_CONFIG["visual_quality"]))
 
         self.build_ui()
         self.bind_events()
@@ -73,14 +73,11 @@ class ImageCompressorApp:
 
         output_actions = tk.Frame(main_frame)
         output_actions.grid(row=1, column=2, columnspan=2, padx=(8, 0), pady=row_padding, sticky="e")
-        self.auto_output_button = tk.Button(
+        self.auto_output_button = ttk.Checkbutton(
             output_actions,
-            command=self.toggle_auto_output,
-            width=button_width,
-            relief="flat",
-            bd=0,
-            fg="white",
-            activeforeground="white",
+            text="自动输出",
+            variable=self.auto_output_var,
+            command=self.update_output_path_mode,
         )
         self.auto_output_button.grid(row=0, column=0, padx=(0, 6))
         self.output_button = tk.Button(
@@ -91,33 +88,16 @@ class ImageCompressorApp:
         )
         self.output_button.grid(row=0, column=1)
 
-        tk.Label(main_frame, text="最大大小 (KB):").grid(row=2, column=0, padx=(0, 8), pady=row_padding, sticky="e")
+        tk.Label(main_frame, text="最大大小 (KB):", font=("Segoe UI", 9)).grid(row=2, column=0, padx=(0, 8), pady=row_padding, sticky="e")
         self.size_entry = tk.Entry(main_frame, width=field_width)
         self.size_entry.grid(row=2, column=1, pady=row_padding, sticky="ew")
 
-        tk.Label(main_frame, text="Resize:").grid(row=2, column=2, padx=(12, 8), pady=row_padding, sticky="e")
-        resize_group = tk.Frame(main_frame)
-        resize_group.grid(row=2, column=3, pady=row_padding, sticky="ew")
-        resize_group.grid_columnconfigure(0, weight=1)
-
-        resize_combo = ttk.Combobox(
-            resize_group,
-            textvariable=self.resize_var,
-            values=["不使用", "640x480", "800x600", "1024x768", "1280x720", "1920x1080"],
-            state="readonly",
-            width=field_width,
-        )
-        resize_combo.grid(row=0, column=0, sticky="ew")
-        resize_combo.bind("<<ComboboxSelected>>", self.on_resize_preset_selected)
-
-        size_frame = tk.Frame(resize_group)
-        size_frame.grid(row=1, column=0, pady=(4, 0), sticky="w")
-        tk.Label(size_frame, text="宽:").grid(row=0, column=0, sticky="w")
-        self.width_entry = tk.Entry(size_frame, width=6)
-        self.width_entry.grid(row=0, column=1, padx=(4, 10))
-        tk.Label(size_frame, text="高:").grid(row=0, column=2, sticky="w")
-        self.height_entry = tk.Entry(size_frame, width=6)
-        self.height_entry.grid(row=0, column=3, padx=(4, 0))
+        tk.Label(main_frame, text="Resize (宽x高/百分比%):", font=("Segoe UI", 9)).grid(row=2, column=2, padx=(12, 8), pady=row_padding, sticky="e")
+        resize_frame = tk.Frame(main_frame)
+        resize_frame.grid(row=2, column=3, pady=row_padding, sticky="ew")
+        resize_frame.grid_columnconfigure(0, weight=1)
+        self.resize_entry = tk.Entry(resize_frame, width=field_width)
+        self.resize_entry.grid(row=0, column=0, sticky="ew")
 
         tk.Label(main_frame, text="输出格式:").grid(row=3, column=0, padx=(0, 8), pady=row_padding, sticky="e")
         format_combo = ttk.Combobox(
@@ -174,7 +154,6 @@ class ImageCompressorApp:
         tk.Label(main_frame, text="日志:").grid(row=7, column=0, padx=(0, 8), pady=(2, 4), sticky="nw")
         self.log_text = tk.Text(main_frame, height=7, state="disabled", wrap="word")
         self.log_text.grid(row=8, column=0, columnspan=4, sticky="nsew")
-        self.refresh_auto_output_button()
 
     def bind_events(self) -> None:
         self.input_path_var.trace_add("write", self.on_input_path_changed)
@@ -191,36 +170,13 @@ class ImageCompressorApp:
         else:
             self.output_entry.config(state="normal")
             self.output_button.config(state="normal")
-        self.refresh_auto_output_button()
-
-    def toggle_auto_output(self) -> None:
-        self.auto_output_var.set(not self.auto_output_var.get())
-        self.update_output_path_mode()
-
-    def refresh_auto_output_button(self) -> None:
-        if self.auto_output_var.get():
-            self.auto_output_button.config(text="自动输出", bg="#43A047", activebackground="#388E3C")
-        else:
-            self.auto_output_button.config(text="手动输出", bg="#78909C", activebackground="#607D8B")
 
     def sync_output_path(self) -> None:
         self.output_path_var.set(derive_output_path(self.input_path_var.get()))
 
     def get_resize_value(self) -> str | None:
-        width = self.width_entry.get().strip()
-        height = self.height_entry.get().strip()
-        if width and height:
-            return f"{width}x{height}"
-        return None
-
-    def on_resize_preset_selected(self, _event) -> None:
-        preset = self.resize_var.get()
-        self.width_entry.delete(0, tk.END)
-        self.height_entry.delete(0, tk.END)
-        if "x" in preset:
-            width, height = preset.split("x")
-            self.width_entry.insert(0, width)
-            self.height_entry.insert(0, height)
+        value = self.resize_entry.get().strip()
+        return value or None
 
     def select_file(self) -> None:
         file_path = filedialog.askopenfilename(
@@ -245,23 +201,10 @@ class ImageCompressorApp:
         self.auto_output_var.set(config.get("auto_output", DEFAULT_CONFIG["auto_output"]))
         self.output_path_var.set(config.get("output_path", DEFAULT_CONFIG["output_path"]))
         configured_format = normalize_format(str(config.get("format", DEFAULT_CONFIG["format"])))
-        self.format_var.set(configured_format if configured_format in SUPPORTED_FORMATS else DEFAULT_CONFIG["format"])
-        self.resize_var.set(config.get("resize", DEFAULT_CONFIG["resize"]))
-        configured_visual_quality = str(config.get("visual_quality", DEFAULT_CONFIG["visual_quality"]))
-        self.visual_quality_var.set(
-            configured_visual_quality
-            if configured_visual_quality in VISUAL_QUALITY_PRESETS
-            else DEFAULT_CONFIG["visual_quality"]
-        )
-
-        self.size_entry.delete(0, tk.END)
-        self.size_entry.insert(0, config.get("target_size_kb", DEFAULT_CONFIG["target_size_kb"]))
-        self.width_entry.delete(0, tk.END)
-        self.width_entry.insert(0, config.get("resize_width", DEFAULT_CONFIG["resize_width"]))
-        self.height_entry.delete(0, tk.END)
-        self.height_entry.insert(0, config.get("resize_height", DEFAULT_CONFIG["resize_height"]))
-        self.max_workers_entry.delete(0, tk.END)
-        self.max_workers_entry.insert(0, config.get("max_workers", DEFAULT_CONFIG["max_workers"]))
+        self.format_var.set(configured_format if configured_format in SUPPORTED_FORMATS else str(DEFAULT_CONFIG["format"]))
+        self.resize_entry.delete(0, tk.END)
+        configured_resize = str(config.get("resize", DEFAULT_CONFIG["resize"]))
+        self.resize_entry.insert(0, "" if configured_resize == "不使用" else configured_resize)
 
     def save_config(self) -> None:
         self.config_store.save(
@@ -270,9 +213,7 @@ class ImageCompressorApp:
                 "auto_output": self.auto_output_var.get(),
                 "output_path": self.output_path_var.get(),
                 "target_size_kb": self.size_entry.get(),
-                "resize": self.resize_var.get(),
-                "resize_width": self.width_entry.get(),
-                "resize_height": self.height_entry.get(),
+                "resize": self.resize_entry.get().strip() or "不使用",
                 "format": self.format_var.get(),
                 "visual_quality": self.visual_quality_var.get(),
                 "max_workers": self.max_workers_entry.get(),
@@ -343,7 +284,7 @@ class ImageCompressorApp:
                 self.format_var.get(),
                 self.get_resize_value(),
                 max_workers,
-                resolve_visual_score(self.visual_quality_var.get()),
+                VISUAL_QUALITY_PRESETS.get(self.visual_quality_var.get(), DEFAULT_VISUAL_SCORE),
             ),
             daemon=True,
         ).start()
@@ -366,11 +307,12 @@ class ImageCompressorApp:
             resize_value=resize_value,
             max_workers=max_workers,
             min_visual_score=min_visual_score,
-            progress_callback=lambda completed, total, result: self.root.after(
-                0, self.update_status, completed, total, result.message
-            ),
+            progress_callback=self._on_progress,
         )
         self.root.after(0, self.finish_compression, status)
+
+    def _on_progress(self, completed: int, total: int, result: CompressionResult) -> None:
+        self.root.after(0, self.update_status, completed, total, result.message)
 
     def update_status(self, completed: int, total: int, message: str) -> None:
         self.progress["value"] = completed

@@ -12,7 +12,7 @@ from pathlib import Path
 APP_NAME = "ImageC"
 CONFIG_FILENAME = "config.json"
 LOG_FILENAME = "compression.log"
-DEFAULT_CONFIG = {
+DEFAULT_CONFIG: dict[str, str | bool] = {
     "input_path": os.path.join(".", "input"),
     "auto_output": True,
     "output_path": "",
@@ -30,7 +30,6 @@ IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".avif"}
 @dataclass(slots=True)
 class AppPaths:
     program_dir: Path
-    fallback_dir: Path
     active_dir: Path
     config_path: Path
     log_path: Path
@@ -75,7 +74,6 @@ def resolve_app_paths(
 
     return AppPaths(
         program_dir=program_dir,
-        fallback_dir=fallback_dir,
         active_dir=active_dir,
         config_path=active_dir / CONFIG_FILENAME,
         log_path=active_dir / LOG_FILENAME,

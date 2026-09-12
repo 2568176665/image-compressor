@@ -83,7 +83,6 @@ def test_config_store_reads_legacy_program_config_and_saves_to_fallback(
 def test_config_store_uses_defaults_when_file_missing(tmp_path: Path) -> None:
     paths = AppPaths(
         program_dir=tmp_path / "program",
-        fallback_dir=tmp_path / "fallback",
         active_dir=tmp_path / "program",
         config_path=tmp_path / "program" / "config.json",
         log_path=tmp_path / "program" / "compression.log",

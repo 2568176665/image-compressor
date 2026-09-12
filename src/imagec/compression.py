@@ -15,7 +15,7 @@ from typing import Callable, Mapping
 
 from PIL import Image, ImageOps
 
-from .subprocess_utils import CommandResult, ProcessRegistry, run_command
+from .subprocess_utils import CommandResult, run_command
 
 
 SUPPORTED_FORMATS = ("jpg", "png", "webp", "avif")
@@ -33,7 +33,6 @@ VISUAL_QUALITY_PRESETS: dict[str, float | None] = {
     "视觉无损 (90)": 90.0,
 }
 DEFAULT_VISUAL_SCORE = VISUAL_QUALITY_PRESETS["优质 (85)"]
-VISUAL_CANDIDATE_LIMIT = 8
 
 
 @dataclass(slots=True)
@@ -75,14 +74,7 @@ def normalize_format(value: str) -> str:
 
 
 def resolve_visual_score(value: str | None) -> float | None:
-    normalized = (value or "").strip()
-    if normalized in VISUAL_QUALITY_PRESETS:
-        return VISUAL_QUALITY_PRESETS[normalized]
-    try:
-        score = float(normalized)
-    except ValueError:
-        return DEFAULT_VISUAL_SCORE
-    return score if score in VISUAL_QUALITY_PRESETS.values() else DEFAULT_VISUAL_SCORE
+    return VISUAL_QUALITY_PRESETS.get(value or "", DEFAULT_VISUAL_SCORE)
 
 
 def resolve_max_workers(value: str | None) -> int:
@@ -119,7 +111,6 @@ class CompressionService:
         encoder_paths: Mapping[str, str] | None,
         metric_path: str | None = None,
         command_runner: Callable[..., CommandResult] = run_command,
-        process_registry: ProcessRegistry | None = None,
     ) -> None:
         self.encoder_paths = {
             normalize_format(name): str(path)
@@ -127,7 +118,6 @@ class CompressionService:
         }
         self.metric_path = str(metric_path) if metric_path else None
         self.command_runner = command_runner
-        self.process_registry = process_registry or ProcessRegistry()
         self.cancel_event = threading.Event()
 
     def set_encoder_paths(self, encoder_paths: Mapping[str, str], metric_path: str | None = None) -> None:
@@ -139,7 +129,6 @@ class CompressionService:
 
     def cancel(self) -> None:
         self.cancel_event.set()
-        self.process_registry.terminate_all()
 
     def reset(self) -> None:
         self.cancel_event.clear()
@@ -236,6 +225,7 @@ class CompressionService:
 
         try:
             plans = self._build_resize_chain(request.resize_value, input_size, request.target_size)
+            use_metric = request.min_visual_score is not None and bool(self.metric_path)
             try:
                 output_dir.mkdir(parents=True, exist_ok=True)
             except OSError:
@@ -258,7 +248,7 @@ class CompressionService:
                         logging.error("生成临时 PNG 失败: %s", error)
                         continue
 
-                    if request.min_visual_score is not None and self.metric_path:
+                    if use_metric:
                         visual_candidate = self._select_visual_candidate(
                             source_png,
                             temp_root,
@@ -305,7 +295,7 @@ class CompressionService:
 
                     visual_score = None
                     quality_limited = False
-                    if request.min_visual_score is not None and self.metric_path:
+                    if use_metric:
                         visual_score = self._score_candidate(source_png, candidate_output)
                         quality_limited = visual_score is None or visual_score < request.min_visual_score
 
@@ -408,7 +398,7 @@ class CompressionService:
         min_visual_score: float,
     ) -> VisualCandidate | None:
         candidates: list[VisualCandidate] = []
-        for index, quality in enumerate(self._visual_quality_levels(output_format)[:VISUAL_CANDIDATE_LIMIT]):
+        for index, quality in enumerate(self._visual_quality_levels(output_format)):
             if self.cancel_event.is_set():
                 return None
             candidate_path = temp_root / f"visual-{index}.{output_format}"
@@ -501,6 +491,7 @@ class CompressionService:
                 str(output_file),
             ]
         elif output_format == "avif":
+            assert quality is not None
             command = [
                 encoder,
                 "--speed",
@@ -725,11 +716,8 @@ class CompressionService:
         if not output_file.exists():
             return CompressionResult(status="failed", message=f"失败: {output_file.stem} (未生成输出文件)")
 
-        try:
-            with Image.open(output_file) as image:
-                image.load()
-        except (OSError, ValueError, SyntaxError) as error:
-            logging.error("输出图片校验失败: %s", error)
+        if not self._is_valid_image(output_file):
+            logging.error("输出图片校验失败: %s", output_file)
             output_file.unlink(missing_ok=True)
             return CompressionResult(status="failed", message=f"失败: {output_file.stem} (输出文件无效)")
 
@@ -744,11 +732,7 @@ class CompressionService:
         return CompressionResult(status="failed", message=f"失败: {output_file.stem} (无法达到目标)")
 
     def _run_command(self, command: list[str]) -> CommandResult:
-        return self.command_runner(
-            command,
-            cancel_event=self.cancel_event,
-            process_registry=self.process_registry,
-        )
+        return self.command_runner(command, cancel_event=self.cancel_event)
 
     def _build_resize_chain(
         self,

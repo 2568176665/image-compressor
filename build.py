@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -23,34 +22,6 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from imagec.runtime import validate_codec_resources
-
-EXCLUDED_SCAN_DIRS = {
-    ".git",
-    ".venv",
-    ".codegraph",
-    ".claude",
-    "third_party",
-}
-
-DIRECTORIES_TO_REMOVE = {
-    "build",
-    "dist",
-    "__pycache__",
-    ".pytest_cache",
-    ".mypy_cache",
-    ".ruff_cache",
-}
-
-FILES_TO_REMOVE = {
-    "compression.log",
-    "nuitka-crash-report.xml",
-}
-
-FILE_SUFFIXES_TO_REMOVE = {
-    ".pyc",
-    ".pyo",
-    ".spec",
-}
 
 
 def parse_args() -> argparse.Namespace:
@@ -75,64 +46,22 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def collect_garbage_paths(root: Path) -> list[Path]:
-    candidates: list[Path] = []
-
-    for current_root, dir_names, file_names in os.walk(root, topdown=True):
-        dir_names[:] = [name for name in dir_names if name not in EXCLUDED_SCAN_DIRS]
-        current = Path(current_root)
-
-        for dir_name in tuple(dir_names):
-            if dir_name in DIRECTORIES_TO_REMOVE:
-                candidates.append(current / dir_name)
-                dir_names.remove(dir_name)
-
-        for file_name in file_names:
-            file_path = current / file_name
-            if file_name in FILES_TO_REMOVE or file_path.suffix.lower() in FILE_SUFFIXES_TO_REMOVE:
-                candidates.append(file_path)
-
-    return sorted(candidates)
-
-
-def remove_path(path: Path) -> bool:
-    if not path.exists():
-        return False
-
-    try:
-        if path.is_dir():
-            for attempt in range(2):
-                try:
-                    shutil.rmtree(path)
-                    break
-                except OSError:
-                    if attempt == 1:
-                        raise
-                    time.sleep(0.1)
-        else:
-            path.unlink()
-    except OSError as error:
-        print(f"[clean] Skip (busy or inaccessible): {path} ({error})")
-        return False
-
-    return True
-
-
 def clean(root: Path) -> int:
-    garbage_paths = collect_garbage_paths(root)
-    removed_count = 0
-
-    if not garbage_paths:
-        print("[clean] No junk files found.")
-        return removed_count
-
-    for path in garbage_paths:
-        if remove_path(path):
-            removed_count += 1
-            print(f"[clean] Removed: {path.relative_to(root)}")
-
-    print(f"[clean] Done. Removed {removed_count} path(s).")
-    return removed_count
+    """删除 git 忽略的构建产物和缓存（保留 .venv 与 .codegraph 工作区）。"""
+    result = subprocess.run(
+        ["git", "clean", "-Xdf", "-e", ".venv", "-e", ".codegraph"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"[clean] git clean 失败: {result.stderr.strip()}")
+        return 0
+    removed = [line for line in result.stdout.splitlines() if line.startswith("Removing ")]
+    for line in removed:
+        print(f"[clean] {line}")
+    print(f"[clean] Done. Removed {len(removed)} path(s).")
+    return len(removed)
 
 
 def build(root: Path, onedir: bool) -> None:

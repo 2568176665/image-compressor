@@ -37,7 +37,6 @@ SOURCE_CODEC_RELATIVE_DIR = Path("src") / "third_party" / "codecs" / "windows-x6
 @dataclass(slots=True)
 class EnsureResult:
     encoder_paths: dict[str, str]
-    versions: dict[str, str]
     ready: bool
     message: str
     metric_path: str | None = None
@@ -47,19 +46,16 @@ def get_codec_resource_dir(base_dir: str | Path | None = None) -> Path:
     candidates: list[Path] = []
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
-        candidates.extend(
-            [
-                Path(meipass) / PACKAGED_CODEC_RELATIVE_DIR,
-                Path(meipass) / "_internal" / PACKAGED_CODEC_RELATIVE_DIR,
-            ]
-        )
+        # PyInstaller onefile 解包根目录。
+        candidates.append(Path(meipass) / PACKAGED_CODEC_RELATIVE_DIR)
 
     if getattr(sys, "frozen", False):
+        # PyInstaller 6 onedir 布局：exe 同目录及 _internal 子目录。
         executable_dir = Path(sys.executable).resolve().parent
         candidates.extend(
             [
-                executable_dir / PACKAGED_CODEC_RELATIVE_DIR,
                 executable_dir / "_internal" / PACKAGED_CODEC_RELATIVE_DIR,
+                executable_dir / PACKAGED_CODEC_RELATIVE_DIR,
             ]
         )
 
@@ -67,9 +63,8 @@ def get_codec_resource_dir(base_dir: str | Path | None = None) -> Path:
         base_path = Path(base_dir).resolve()
         candidates.extend(
             [
-                base_path / PACKAGED_CODEC_RELATIVE_DIR,
-                base_path / "_internal" / PACKAGED_CODEC_RELATIVE_DIR,
                 base_path / SOURCE_CODEC_RELATIVE_DIR,
+                base_path / PACKAGED_CODEC_RELATIVE_DIR,
             ]
         )
 
@@ -79,7 +74,7 @@ def get_codec_resource_dir(base_dir: str | Path | None = None) -> Path:
     for candidate in candidates:
         if candidate.is_dir():
             return candidate
-    return candidates[0] if candidates else project_root / SOURCE_CODEC_RELATIVE_DIR
+    return project_root / SOURCE_CODEC_RELATIVE_DIR
 
 
 def validate_codec_resources(resource_dir: str | Path) -> list[Path]:
@@ -179,7 +174,6 @@ class CodecRuntimeManager:
         return EnsureResult(
             encoder_paths=encoder_paths,
             metric_path=metric_path,
-            versions=versions,
             ready=True,
             message=(
                 "编码器已就绪: "
@@ -255,7 +249,6 @@ class CodecRuntimeManager:
         return EnsureResult(
             encoder_paths={},
             metric_path=None,
-            versions={},
             ready=False,
             message=message,
         )
