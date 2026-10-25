@@ -9,14 +9,15 @@ import pytest
 from PIL import Image, features
 
 from imagec.compression import (
+    MAX_WORKERS_LIMIT,
     SUPPORTED_FORMATS,
     CompressionRequest,
     CompressionResult,
     CompressionService,
     TransformPlan,
     collect_image_files,
+    normalize_format,
     resolve_max_workers,
-    resolve_visual_score,
 )
 from imagec.subprocess_utils import CommandResult, run_command
 
@@ -75,6 +76,11 @@ def _service(calls: list[list[str]], *, oversize_once: bool = False) -> Compress
     )
 
 
+def test_normalize_format_maps_jpeg() -> None:
+    assert normalize_format(".JPEG") == "jpg"
+    assert normalize_format("PNG") == "png"
+
+
 def test_resolve_max_workers_uses_safe_default(monkeypatch) -> None:
     monkeypatch.setattr("imagec.compression.os.cpu_count", lambda: 16)
 
@@ -87,12 +93,9 @@ def test_resolve_max_workers_accepts_user_override(monkeypatch) -> None:
     assert resolve_max_workers("9") == 9
 
 
-def test_resolve_visual_score_uses_presets_and_default() -> None:
-    assert resolve_visual_score("关闭") is None
-    assert resolve_visual_score("高质量 (80)") == 80
-    assert resolve_visual_score("视觉无损 (90)") == 90
-    assert resolve_visual_score("unexpected") == 85
-    assert resolve_visual_score(None) == 85
+def test_resolve_max_workers_clamps_to_limit() -> None:
+    assert resolve_max_workers("200") == MAX_WORKERS_LIMIT
+    assert resolve_max_workers("-5") >= 1
 
 
 def test_collect_image_files_includes_avif_and_is_case_insensitive(tmp_path: Path) -> None:
@@ -111,7 +114,7 @@ def test_collect_image_files_includes_avif_and_is_case_insensitive(tmp_path: Pat
     ]
 
 
-def test_percent_resize_is_applied_with_lanczos(tmp_path: Path) -> None:
+def test_percent_resize_is_applied_with_lanczos() -> None:
     source = Image.new("RGB", (80, 60), (40, 120, 220))
     service = _service([])
 
@@ -148,7 +151,7 @@ def test_jpeg_encoder_command_and_transparent_pixels_use_white_background(tmp_pa
 
     assert result.status == "completed"
     assert calls[0][0] == "cjpegli.exe"
-    assert output_dir in Path(calls[0][1]).parents
+    assert output_dir not in Path(calls[0][1]).parents
     assert "--target_size" in calls[0]
     assert result.output_file is not None
     assert Path(result.output_file).suffix == ".jpg"
@@ -238,78 +241,131 @@ def test_resize_retry_keeps_final_output_within_target(tmp_path: Path) -> None:
     assert Path(result.output_file).stat().st_size <= 500
 
 
-def test_visual_mode_selects_smallest_candidate_that_meets_score(tmp_path: Path) -> None:
+def test_existing_output_is_never_overwritten_by_default(tmp_path: Path) -> None:
     source = tmp_path / "source.png"
     _write_image(source)
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    existing = output_dir / "source.jpg"
+    existing.write_bytes(b"keep-me")
+
+    result = _service([]).compress_file(
+        CompressionRequest(str(source), str(output_dir), 20_000, "jpg", None)
+    )
+
+    assert result.status == "completed"
+    assert result.output_file is not None
+    assert Path(result.output_file).name == "source-1.jpg"
+    assert existing.read_bytes() == b"keep-me"
+
+
+def test_output_is_overwritten_only_when_requested(tmp_path: Path) -> None:
+    source = tmp_path / "source.png"
+    _write_image(source)
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    existing = output_dir / "source.jpg"
+    existing.write_bytes(b"keep-me")
+
+    result = _service([]).compress_file(
+        CompressionRequest(str(source), str(output_dir), 20_000, "jpg", None, overwrite=True)
+    )
+
+    assert result.status == "completed"
+    assert Path(result.output_file or "").name == "source.jpg"
+    assert existing.read_bytes() != b"keep-me"
+
+
+def test_parallel_same_stem_inputs_get_distinct_outputs(tmp_path: Path) -> None:
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    sources = []
+    for suffix, mode in ((".png", "RGB"), (".webp", "RGB")):
+        source = tmp_path / f"duplicate{suffix}"
+        _write_image(source, mode=mode)
+        sources.append(str(source))
+
     service = _service([])
-    service.metric_path = "ssimulacra2.exe"
-    sizes = {0.5: 99_000, 1.0: 72_000, 1.5: 45_000, 2.0: 40_000, 2.5: 35_000, 3.0: 30_000, 4.0: 25_000, 5.0: 20_000}
-    scores = {0.5: 96.0, 1.0: 91.0, 1.5: 86.0, 2.0: 84.0, 2.5: 80.0, 3.0: 76.0, 4.0: 70.0, 5.0: 60.0}
-
-    def encode_at_quality(_source: Path, output: Path, _format: str, quality: float | None) -> bool:
-        assert quality is not None
-        image = Image.new("RGB", (64, 48), (40, 120, 220))
-        image.save(output, format="JPEG", quality=95)
-        image.close()
-        output.write_bytes(output.read_bytes() + b"x" * (sizes[quality] - output.stat().st_size))
-        return True
-
-    service._encode_at_quality = encode_at_quality  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
-    quality_by_index = (0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0)
-    service._score_candidate = lambda _source, candidate: scores[  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
-        quality_by_index[int(candidate.stem.split("-")[-1])]
+    outputs = [
+        service.compress_file(CompressionRequest(source, str(output_dir), 20_000, "jpg", None))
+        for source in sources
     ]
 
-    result = service.compress_file(
-        CompressionRequest(str(source), str(tmp_path / "out"), 100_000, "jpg", None, 85)
+    names = {Path(result.output_file or "").name for result in outputs}
+    assert all(result.status == "completed" for result in outputs)
+    assert len(names) == 2
+
+
+def test_in_place_conversion_refuses_to_clobber_source(tmp_path: Path) -> None:
+    source = tmp_path / "photo.png"
+    _write_image(source)
+    original = source.read_bytes()
+
+    result = _service([]).compress_file(
+        CompressionRequest(str(source), str(tmp_path), 20_000, "png", None, overwrite=True)
     )
 
-    assert result.status == "completed"
-    assert result.output_size == 45_000
-    assert result.visual_score == 86.0
-    assert result.quality_limited is False
-    assert result.message == "完成: 43.9 KB, 视觉评分 86.0 — source"
+    assert result.status == "failed"
+    assert "源文件" in result.message
+    assert source.read_bytes() == original
 
 
-def test_visual_mode_marks_best_under_limit_when_no_candidate_meets_score(tmp_path: Path) -> None:
-    source = tmp_path / "source.png"
-    _write_image(source)
+def test_batch_survives_unexpected_worker_exception(tmp_path: Path) -> None:
+    files = []
+    for index in range(3):
+        file_path = tmp_path / f"file-{index}.jpg"
+        _write_image(file_path)
+        files.append(str(file_path))
+
     service = _service([])
-    service.metric_path = "ssimulacra2.exe"
 
-    def encode_at_quality(_source: Path, output: Path, _format: str, quality: float | None) -> bool:
-        image = Image.new("RGB", (64, 48), (40, 120, 220))
-        image.save(output, format="JPEG", quality=95)
-        image.close()
-        output.write_bytes(output.read_bytes() + b"x" * (48_000 - output.stat().st_size))
-        return True
+    def boom(request: CompressionRequest):
+        if request.input_file.endswith("file-1.jpg"):
+            raise RuntimeError("unexpected")
+        return CompressionResult(status="completed", message=Path(request.input_file).name)
 
-    service._encode_at_quality = encode_at_quality  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
-    service._score_candidate = lambda _source, _candidate: 84.0  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    service.compress_file = boom  # type: ignore[method-assign]
 
-    result = service.compress_file(
-        CompressionRequest(str(source), str(tmp_path / "out"), 50_000, "jpg", None, 85)
+    status = service.run_batch(
+        files,
+        output_dir=str(tmp_path / "out"),
+        target_size=500,
+        output_format="jpg",
+        resize_value=None,
+        max_workers=2,
     )
 
-    assert result.status == "completed"
-    assert result.visual_score == 84.0
-    assert result.quality_limited is True
-    assert "受大小上限限制" in result.message
+    assert status == "failed"
 
 
-def test_visual_mode_falls_back_to_target_size_when_metric_cannot_score(tmp_path: Path) -> None:
-    source = tmp_path / "source.png"
-    _write_image(source)
-    calls: list[list[str]] = []
-    service = _service(calls)
-    service.metric_path = "ssimulacra2.exe"
+def test_batch_survives_progress_callback_exception(tmp_path: Path) -> None:
+    files = []
+    for index in range(2):
+        file_path = tmp_path / f"file-{index}.jpg"
+        _write_image(file_path)
+        files.append(str(file_path))
 
-    result = service.compress_file(
-        CompressionRequest(str(source), str(tmp_path / "out"), 20_000, "jpg", None, 85)
+    service = _service([])
+
+    def fake_compress(request: CompressionRequest):
+        return CompressionResult(status="completed", message="ok")
+
+    service.compress_file = fake_compress  # type: ignore[method-assign]
+
+    def broken_callback(_completed: int, _total: int, _result: CompressionResult) -> None:
+        raise RuntimeError("callback failed")
+
+    status = service.run_batch(
+        files,
+        output_dir=str(tmp_path / "out"),
+        target_size=500,
+        output_format="jpg",
+        resize_value=None,
+        max_workers=2,
+        progress_callback=broken_callback,
     )
 
-    assert result.status == "completed"
-    assert any("--target_size" in command for command in calls)
+    assert status == "completed"
 
 
 def test_failed_encoding_cleans_temporary_output_and_does_not_create_final_file(tmp_path: Path) -> None:
@@ -334,6 +390,22 @@ def test_failed_encoding_cleans_temporary_output_and_does_not_create_final_file(
 
     assert result.status == "failed"
     assert not (output_dir / "source.jpg").exists()
+
+
+def test_encoder_timeout_reports_failure(tmp_path: Path) -> None:
+    source = tmp_path / "source.png"
+    _write_image(source)
+
+    def timeout_runner(command: list[str], **_kwargs) -> CommandResult:
+        return CommandResult(returncode=-1, stdout="", stderr="", cancelled=False, timed_out=True)
+
+    service = CompressionService(encoder_paths={"jpg": "cjpegli.exe"}, command_runner=timeout_runner)
+    result = service.compress_file(
+        CompressionRequest(str(source), str(tmp_path / "out"), 20_000, "jpg", None)
+    )
+
+    assert result.status == "failed"
+    assert "超时" in result.message
 
 
 @pytest.mark.skipif(not features.check("avif"), reason="Pillow AVIF codec is unavailable")
@@ -364,7 +436,7 @@ def test_run_batch_reports_cancelled_status(tmp_path: Path) -> None:
             service.cancel()
         return CompressionResult(status="completed", message=Path(request.input_file).name)
 
-    service.compress_file = fake_compress  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    service.compress_file = fake_compress  # type: ignore[method-assign]
 
     status = service.run_batch(
         files,
@@ -397,3 +469,13 @@ def test_cancel_terminates_running_external_process() -> None:
 
     assert not worker.is_alive()
     assert result_holder["result"].cancelled is True
+
+
+def test_run_command_times_out() -> None:
+    result = run_command(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        timeout=0.5,
+    )
+
+    assert result.timed_out is True
+    assert result.cancelled is False

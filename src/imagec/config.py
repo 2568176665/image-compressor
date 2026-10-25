@@ -2,27 +2,27 @@ from __future__ import annotations
 
 import json
 import logging
+import logging.handlers
 import os
 import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-
 APP_NAME = "ImageC"
 CONFIG_FILENAME = "config.json"
 LOG_FILENAME = "compression.log"
+LOG_MAX_BYTES = 1024 * 1024
+LOG_BACKUP_COUNT = 3
 DEFAULT_CONFIG: dict[str, str | bool] = {
     "input_path": os.path.join(".", "input"),
     "auto_output": True,
     "output_path": "",
     "target_size_kb": "100",
     "resize": "不使用",
-    "resize_width": "",
-    "resize_height": "",
     "format": "jpg",
-    "visual_quality": "优质 (85)",
     "max_workers": "4",
+    "overwrite": False,
 }
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".avif"}
 
@@ -97,7 +97,7 @@ class ConfigStore:
             except (OSError, json.JSONDecodeError):
                 continue
             if isinstance(loaded, dict):
-                config.update(loaded)
+                config.update({key: value for key, value in loaded.items() if key in DEFAULT_CONFIG})
             break
         return config
 
@@ -122,7 +122,14 @@ def configure_logging(paths: AppPaths) -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
-        handlers=[logging.FileHandler(paths.log_path, encoding="utf-8")],
+        handlers=[
+            logging.handlers.RotatingFileHandler(
+                paths.log_path,
+                maxBytes=LOG_MAX_BYTES,
+                backupCount=LOG_BACKUP_COUNT,
+                encoding="utf-8",
+            )
+        ],
         force=True,
     )
 

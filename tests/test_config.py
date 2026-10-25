@@ -1,9 +1,18 @@
 from __future__ import annotations
 
 import json
+import logging
+import logging.handlers
 from pathlib import Path
 
-from imagec.config import AppPaths, ConfigStore, derive_output_path, resolve_app_paths
+from imagec.config import (
+    DEFAULT_CONFIG,
+    AppPaths,
+    ConfigStore,
+    configure_logging,
+    derive_output_path,
+    resolve_app_paths,
+)
 
 
 def test_derive_output_path_from_empty_input() -> None:
@@ -94,5 +103,69 @@ def test_config_store_uses_defaults_when_file_missing(tmp_path: Path) -> None:
 
     assert loaded["target_size_kb"] == "100"
     assert loaded["format"] == "jpg"
-    assert loaded["visual_quality"] == "优质 (85)"
     assert loaded["max_workers"] == "4"
+    assert loaded["overwrite"] is False
+
+
+def test_config_round_trip_preserves_user_settings(tmp_path: Path) -> None:
+    paths = AppPaths(
+        program_dir=tmp_path / "program",
+        active_dir=tmp_path / "program",
+        config_path=tmp_path / "program" / "config.json",
+        log_path=tmp_path / "program" / "compression.log",
+        legacy_config_path=None,
+    )
+    store = ConfigStore(paths)
+
+    store.save({"target_size_kb": "250", "max_workers": "8", "overwrite": True})
+
+    loaded = store.load()
+    assert loaded["target_size_kb"] == "250"
+    assert loaded["max_workers"] == "8"
+    assert loaded["overwrite"] is True
+    assert set(DEFAULT_CONFIG).issubset(loaded)
+
+
+def test_config_store_ignores_unknown_legacy_fields(tmp_path: Path) -> None:
+    paths = AppPaths(
+        program_dir=tmp_path / "program",
+        active_dir=tmp_path / "program",
+        config_path=tmp_path / "program" / "config.json",
+        log_path=tmp_path / "program" / "compression.log",
+        legacy_config_path=None,
+    )
+    paths.config_path.parent.mkdir(parents=True)
+    paths.config_path.write_text(
+        json.dumps({"visual_quality": "优质 (85)", "resize_width": "10"}),
+        encoding="utf-8",
+    )
+
+    loaded = ConfigStore(paths).load()
+
+    assert "visual_quality" not in loaded
+    assert "resize_width" not in loaded
+
+
+def test_configure_logging_uses_rotating_handler(tmp_path: Path) -> None:
+    paths = AppPaths(
+        program_dir=tmp_path,
+        active_dir=tmp_path,
+        config_path=tmp_path / "config.json",
+        log_path=tmp_path / "compression.log",
+        legacy_config_path=None,
+    )
+
+    configure_logging(paths)
+    logger = logging.getLogger()
+    handlers = [
+        handler
+        for handler in logger.handlers
+        if isinstance(handler, logging.handlers.RotatingFileHandler)
+    ]
+    try:
+        assert handlers, "expected a rotating file handler"
+        assert handlers[0].maxBytes > 0
+    finally:
+        for handler in list(logger.handlers):
+            handler.close()
+            logger.removeHandler(handler)

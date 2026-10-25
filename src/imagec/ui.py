@@ -7,15 +7,13 @@ from tkinter import filedialog, messagebox, ttk
 
 from .compression import (
     SUPPORTED_FORMATS,
-    DEFAULT_VISUAL_SCORE,
-    VISUAL_QUALITY_PRESETS,
     CompressionResult,
     CompressionService,
     collect_image_files,
     normalize_format,
     resolve_max_workers,
 )
-from .config import ConfigStore, DEFAULT_CONFIG, derive_output_path
+from .config import DEFAULT_CONFIG, ConfigStore, derive_output_path
 from .runtime import CodecRuntimeManager, EnsureResult
 
 
@@ -36,10 +34,10 @@ class ImageCompressorApp:
         self.is_compressing = False
 
         self.auto_output_var = tk.BooleanVar(value=True)
+        self.overwrite_var = tk.BooleanVar(value=False)
         self.input_path_var = tk.StringVar(value=str(DEFAULT_CONFIG["input_path"]))
         self.output_path_var = tk.StringVar()
         self.format_var = tk.StringVar(value=str(DEFAULT_CONFIG["format"]))
-        self.visual_quality_var = tk.StringVar(value=str(DEFAULT_CONFIG["visual_quality"]))
 
         self.build_ui()
         self.bind_events()
@@ -113,14 +111,11 @@ class ImageCompressorApp:
         self.max_workers_entry = tk.Entry(main_frame, width=field_width)
         self.max_workers_entry.grid(row=3, column=3, pady=row_padding, sticky="ew")
 
-        tk.Label(main_frame, text="视觉质量:").grid(row=4, column=0, padx=(0, 8), pady=row_padding, sticky="e")
-        ttk.Combobox(
+        ttk.Checkbutton(
             main_frame,
-            textvariable=self.visual_quality_var,
-            values=list(VISUAL_QUALITY_PRESETS),
-            state="readonly",
-            width=field_width,
-        ).grid(row=4, column=1, pady=row_padding, sticky="ew")
+            text="覆盖同名输出文件",
+            variable=self.overwrite_var,
+        ).grid(row=4, column=2, columnspan=2, padx=(12, 0), pady=row_padding, sticky="w")
 
         compress_button_frame = tk.Frame(main_frame)
         compress_button_frame.grid(row=5, column=0, columnspan=4, pady=(10, 8), sticky="ew")
@@ -197,11 +192,19 @@ class ImageCompressorApp:
 
     def load_config(self) -> None:
         config = self.config_store.load()
-        self.input_path_var.set(config.get("input_path", DEFAULT_CONFIG["input_path"]))
-        self.auto_output_var.set(config.get("auto_output", DEFAULT_CONFIG["auto_output"]))
-        self.output_path_var.set(config.get("output_path", DEFAULT_CONFIG["output_path"]))
+        self.input_path_var.set(str(config.get("input_path", DEFAULT_CONFIG["input_path"])))
+        self.auto_output_var.set(bool(config.get("auto_output", DEFAULT_CONFIG["auto_output"])))
+        self.overwrite_var.set(bool(config.get("overwrite", DEFAULT_CONFIG["overwrite"])))
+        self.output_path_var.set(str(config.get("output_path", DEFAULT_CONFIG["output_path"])))
         configured_format = normalize_format(str(config.get("format", DEFAULT_CONFIG["format"])))
         self.format_var.set(configured_format if configured_format in SUPPORTED_FORMATS else str(DEFAULT_CONFIG["format"]))
+
+        self.size_entry.delete(0, tk.END)
+        self.size_entry.insert(0, str(config.get("target_size_kb", DEFAULT_CONFIG["target_size_kb"])))
+
+        self.max_workers_entry.delete(0, tk.END)
+        self.max_workers_entry.insert(0, str(config.get("max_workers", DEFAULT_CONFIG["max_workers"])))
+
         self.resize_entry.delete(0, tk.END)
         configured_resize = str(config.get("resize", DEFAULT_CONFIG["resize"]))
         self.resize_entry.insert(0, "" if configured_resize == "不使用" else configured_resize)
@@ -211,11 +214,11 @@ class ImageCompressorApp:
             {
                 "input_path": self.input_path_var.get(),
                 "auto_output": self.auto_output_var.get(),
+                "overwrite": self.overwrite_var.get(),
                 "output_path": self.output_path_var.get(),
                 "target_size_kb": self.size_entry.get(),
                 "resize": self.resize_entry.get().strip() or "不使用",
                 "format": self.format_var.get(),
-                "visual_quality": self.visual_quality_var.get(),
                 "max_workers": self.max_workers_entry.get(),
             }
         )
@@ -231,7 +234,7 @@ class ImageCompressorApp:
     def finish_runtime_check(self, result: EnsureResult) -> None:
         self.runtime_result = result
         if result.ready:
-            self.service.set_encoder_paths(result.encoder_paths, result.metric_path)
+            self.service.set_encoder_paths(result.encoder_paths)
         self.append_log(result.message)
         self.compress_button.config(
             state="normal" if result.ready and not self.is_compressing else "disabled"
@@ -284,7 +287,7 @@ class ImageCompressorApp:
                 self.format_var.get(),
                 self.get_resize_value(),
                 max_workers,
-                VISUAL_QUALITY_PRESETS.get(self.visual_quality_var.get(), DEFAULT_VISUAL_SCORE),
+                self.overwrite_var.get(),
             ),
             daemon=True,
         ).start()
@@ -297,19 +300,25 @@ class ImageCompressorApp:
         output_format: str,
         resize_value: str | None,
         max_workers: int,
-        min_visual_score: float | None,
+        overwrite: bool,
     ) -> None:
-        status = self.service.run_batch(
-            image_files,
-            output_dir=output_path,
-            target_size=target_size,
-            output_format=output_format,
-            resize_value=resize_value,
-            max_workers=max_workers,
-            min_visual_score=min_visual_score,
-            progress_callback=self._on_progress,
-        )
-        self.root.after(0, self.finish_compression, status)
+        status = "failed"
+        try:
+            status = self.service.run_batch(
+                image_files,
+                output_dir=output_path,
+                target_size=target_size,
+                output_format=output_format,
+                resize_value=resize_value,
+                max_workers=max_workers,
+                overwrite=overwrite,
+                progress_callback=self._on_progress,
+            )
+        except Exception:
+            logging.exception("压缩任务异常退出")
+            status = "failed"
+        finally:
+            self.root.after(0, self.finish_compression, status)
 
     def _on_progress(self, completed: int, total: int, result: CompressionResult) -> None:
         self.root.after(0, self.update_status, completed, total, result.message)

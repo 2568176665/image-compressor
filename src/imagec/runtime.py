@@ -9,8 +9,8 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from PIL import features
 
+from PIL import features
 
 CODEC_FORMATS = ("jpg", "png", "webp", "avif")
 CODEC_EXECUTABLES = {
@@ -27,7 +27,6 @@ CODEC_VERSION_COMMANDS = {
     "cwebp.exe": ["-version"],
     "avifenc.exe": ["--version"],
 }
-METRIC_EXECUTABLE = "ssimulacra2.exe"
 VERSION_PATTERN = re.compile(r"\b(?:v)?(\d+(?:\.\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?)\b")
 MANIFEST_FILENAME = "manifest.json"
 PACKAGED_CODEC_RELATIVE_DIR = Path("codecs") / "windows-x64"
@@ -39,7 +38,6 @@ class EnsureResult:
     encoder_paths: dict[str, str]
     ready: bool
     message: str
-    metric_path: str | None = None
 
 
 def get_codec_resource_dir(base_dir: str | Path | None = None) -> Path:
@@ -94,7 +92,6 @@ def validate_codec_resources(resource_dir: str | Path) -> list[Path]:
         raise RuntimeError("编码器资源平台必须为 windows-x64")
 
     encoders = manifest.get("encoders")
-    metrics = manifest.get("metrics")
     files = manifest.get("files")
     if not isinstance(encoders, dict) or not isinstance(files, dict):
         raise RuntimeError("编码器资源清单缺少 encoders 或 files")
@@ -106,11 +103,6 @@ def validate_codec_resources(resource_dir: str | Path) -> list[Path]:
         raise RuntimeError("编码器资源清单未包含全部必需编码器")
     if not required_names.issubset(files):
         raise RuntimeError("编码器资源清单未校验全部必需编码器")
-    if metrics is not None:
-        if not isinstance(metrics, dict) or metrics.get("ssimulacra2") != METRIC_EXECUTABLE:
-            raise RuntimeError("感知评分工具映射不符合预期")
-        if METRIC_EXECUTABLE not in files:
-            raise RuntimeError("感知评分工具未包含在资源清单中")
 
     validated: list[Path] = []
     for relative_name, expected_hash in files.items():
@@ -149,7 +141,6 @@ class CodecRuntimeManager:
             validate_codec_resources(resource_dir)
             manifest = self._load_manifest(resource_dir)
             encoder_paths = self._resolve_encoder_paths(resource_dir, manifest)
-            metric_path = self._resolve_metric_path(resource_dir, manifest)
         except (OSError, RuntimeError, UnicodeError, ValueError) as error:
             return self._failure(str(error))
 
@@ -173,13 +164,8 @@ class CodecRuntimeManager:
 
         return EnsureResult(
             encoder_paths=encoder_paths,
-            metric_path=metric_path,
             ready=True,
-            message=(
-                "编码器已就绪: "
-                + ", ".join(f"{name} {version}" for name, version in versions.items())
-                + ("；感知评分已启用" if metric_path else "；未找到感知评分工具，将仅限制文件大小")
-            ),
+            message="编码器已就绪: " + ", ".join(f"{name} {version}" for name, version in versions.items()),
         )
 
     def _get_base_dir(self) -> str:
@@ -192,7 +178,14 @@ class CodecRuntimeManager:
         return os.name == "nt" and machine in {"amd64", "x86_64", "x64"}
 
     def _load_manifest(self, resource_dir: Path) -> dict:
-        return json.loads((resource_dir / MANIFEST_FILENAME).read_text(encoding="utf-8"))
+        manifest_path = resource_dir / MANIFEST_FILENAME
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise RuntimeError(f"编码器资源清单无效: {manifest_path}") from error
+        if not isinstance(manifest, dict):
+            raise RuntimeError(f"编码器资源清单无效: {manifest_path}")
+        return manifest
 
     def _resolve_encoder_paths(self, resource_dir: Path, manifest: dict) -> dict[str, str]:
         encoders = manifest["encoders"]
@@ -202,16 +195,6 @@ class CodecRuntimeManager:
         }
         paths["oxipng"] = str((resource_dir / encoders["oxipng"]).resolve())
         return paths
-
-    def _resolve_metric_path(self, resource_dir: Path, manifest: dict) -> str | None:
-        metrics = manifest.get("metrics")
-        if not isinstance(metrics, dict):
-            return None
-        executable = metrics.get("ssimulacra2")
-        if executable != METRIC_EXECUTABLE:
-            return None
-        path = (resource_dir / executable).resolve()
-        return str(path) if path.is_file() else None
 
     def _pillow_supports_avif(self) -> bool:
         try:
@@ -248,7 +231,6 @@ class CodecRuntimeManager:
     def _failure(self, message: str) -> EnsureResult:
         return EnsureResult(
             encoder_paths={},
-            metric_path=None,
             ready=False,
             message=message,
         )

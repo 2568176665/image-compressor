@@ -13,7 +13,7 @@ from imagec.runtime import (
 
 def _write_manifest(root: Path) -> None:
     files: dict[str, str] = {}
-    for executable in sorted({*CODEC_EXECUTABLES.values(), "ssimulacra2.exe"}):
+    for executable in sorted(CODEC_EXECUTABLES.values()):
         path = root / executable
         path.write_bytes(executable.encode("ascii"))
         files[executable] = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -22,7 +22,6 @@ def _write_manifest(root: Path) -> None:
     manifest = {
         "platform": "windows-x64",
         "encoders": CODEC_EXECUTABLES,
-        "metrics": {"ssimulacra2": "ssimulacra2.exe"},
         "files": files,
     }
     (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -69,15 +68,15 @@ def test_runtime_resolves_all_encoders_and_checks_pillow(tmp_path: Path, monkeyp
 
     assert result.ready is True
     assert set(result.encoder_paths) == {"jpg", "png", "oxipng", "webp", "avif"}
-    assert result.metric_path == str((tmp_path / "ssimulacra2.exe").resolve())
 
 
-def test_runtime_allows_older_bundle_without_visual_metric(tmp_path: Path, monkeypatch) -> None:
+def test_runtime_rejects_manifest_without_metric_entry(tmp_path: Path, monkeypatch) -> None:
     _write_manifest(tmp_path)
     manifest_path = tmp_path / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest.pop("metrics")
-    manifest["files"].pop("ssimulacra2.exe")
+    manifest["metrics"] = {"ssimulacra2": "ssimulacra2.exe"}
+    manifest["files"]["ssimulacra2.exe"] = hashlib.sha256(b"metric").hexdigest()
+    (tmp_path / "ssimulacra2.exe").write_bytes(b"metric")
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     manager = CodecRuntimeManager(resource_dir=str(tmp_path))
@@ -88,8 +87,6 @@ def test_runtime_allows_older_bundle_without_visual_metric(tmp_path: Path, monke
     result = manager.ensure_codecs_ready()
 
     assert result.ready is True
-    assert result.metric_path is None
-    assert "仅限制文件大小" in result.message
 
 
 def test_runtime_fails_when_manifest_is_missing(tmp_path: Path, monkeypatch) -> None:
@@ -102,9 +99,7 @@ def test_runtime_fails_when_manifest_is_missing(tmp_path: Path, monkeypatch) -> 
     assert "清单" in result.message
 
 
-def test_runtime_reports_ready_bundle(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_runtime_reports_ready_bundle(tmp_path: Path, monkeypatch) -> None:
     _write_manifest(tmp_path)
     manager = CodecRuntimeManager(resource_dir=str(tmp_path))
     monkeypatch.setattr(manager, "_is_supported_platform", lambda: True)
@@ -114,3 +109,13 @@ def test_runtime_reports_ready_bundle(
 
     assert result.ready is True
     assert result.message.startswith("编码器已就绪:")
+
+
+def test_runtime_rejects_invalid_manifest_json(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "manifest.json").write_text("{not json", encoding="utf-8")
+    manager = CodecRuntimeManager(resource_dir=str(tmp_path))
+    monkeypatch.setattr(manager, "_is_supported_platform", lambda: True)
+
+    result = manager.ensure_codecs_ready()
+
+    assert result.ready is False
