@@ -2,11 +2,10 @@
   "platform": "windows-x64",
   "versions": {
     "cjpegli.exe": "libjxl 0.11.2",
-    "ssimulacra2.exe": "libjxl 0.11.2",
     "pngquant.exe": "pngquant 3.0.3",
-    "oxipng.exe": "oxipng 10.1.1",
+    "oxipng.exe": "oxipng 10.2.1",
     "cwebp.exe": "libwebp 1.6.0",
-    "avifenc.exe": "libavif 1.4.1"
+    "avifenc.exe": "libavif 1.4.2"
   },
   "encoders": {
     "jpg": "cjpegli.exe",
@@ -15,13 +14,12 @@
     "webp": "cwebp.exe",
     "avif": "avifenc.exe"
   },
-  "metrics": {
-    "ssimulacra2": "ssimulacra2.exe"
-  },
   "files": {
-    "avifenc.exe": "c334ccca6d78dd79b8a7387c13ff54bbf09287335f99b5f1a609ea9f965c6f07",
+    "avifenc.exe": "42312321ed9f715987cb3623292eaedc778970b45efb9b1de62ce795f61991a0",
     "cjpegli.exe": "f89af03898d066662e1715a4491ff2c81403f776cc88359020e5f7a1ea9f64c7",
     "cwebp.exe": "6a2f5cb5dce71366353ab1d9caf9c636e039f25703acfce1c148eed346f2f72a",
+    "liblcms2-2.dll": "03314471fadd04cdd63c108472ff85d058903d236a0356c14eda363f0e1ccb65",
+    "libpng16-16.dll": "5c1dd5410af563f4a3c4aee10d1f749aa71e0d7fb3b4fac240eb9e96cadebd26",
     "LICENSE.cjpegli-brotli.txt": "3d180008e36922a4e8daec11c34c7af264fed5962d07924aea928c38e8663c94",
     "LICENSE.cjpegli-giflib.txt": "0c9b7990ecdca88b676db232c226548ac408b279f550d424d996f0d83591dd8e",
     "LICENSE.cjpegli-highway.txt": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1",
@@ -41,11 +39,8 @@
     "LICENSE.oxipng.txt": "1bc9688d785fa50345f803824ddde000bdabedda9d1803dc41a1fedd81f784fc",
     "LICENSE.pngquant.txt": "e4f467f7abf860b4e620f5f60fdd88bc3a63a0fdb98a481fb002b5e511c9b826",
     "LICENSE.zlib.txt": "845efc77857d485d91fb3e0b884aaa929368c717ae8186b66fe1ed2495753243",
-    "liblcms2-2.dll": "03314471fadd04cdd63c108472ff85d058903d236a0356c14eda363f0e1ccb65",
-    "libpng16-16.dll": "5c1dd5410af563f4a3c4aee10d1f749aa71e0d7fb3b4fac240eb9e96cadebd26",
-    "oxipng.exe": "56e29d2bc4a3a6af911f2168b20d5a911cb808fa291579d974549a9e24ee5748",
+    "oxipng.exe": "35ae3980ab831af64f4aecc98f69b81bfa146fa750a61d17ebbb12520128cbc8",
     "pngquant.exe": "540eed3a181401f3cd3f0cfc63f8ec3655a3d8b93b05c9333426f8e1e2193b3f",
-    "ssimulacra2.exe": "08a44e2d4cd44098695dbe47cdec1f0ba7c68bf9f0389b5785133d81e9b25fed",
     "zlib1.dll": "11cd91171765cd65f1c3362e3df67e5f5a618a6b88c8cdec899b802eaf1c7b0d"
   }
 }
