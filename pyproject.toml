@@ -1,15 +1,25 @@
 [project]
 name = "imagec"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.2.0"
+description = "Windows 桌面图片批量压缩工具，基于 Pillow 与命令行编码器"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "Pillow",
 ]
 
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/imagec"]
+
 [dependency-groups]
 dev = [
     "pyinstaller",
     "pytest",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

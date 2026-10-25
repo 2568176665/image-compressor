@@ -15,10 +15,12 @@
 /compression.log
 config.json
 
-# Bundled codec staging files
-/src/third_party/codecs/_downloads/
-
-# Local tooling / workspace
+# Test / tooling caches
+/.pytest_cache/
+/.ruff_cache/
+/.mypy_cache/
 /.codegraph/
 .python-version
-uv.lock
+
+# Bundled codec staging files
+/src/third_party/codecs/_downloads/
