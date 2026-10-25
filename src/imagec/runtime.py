@@ -57,6 +57,14 @@ def get_codec_resource_dir(base_dir: str | Path | None = None) -> Path:
             ]
         )
 
+    compiled = globals().get("__compiled__")
+    if compiled is not None:
+        # Nuitka 把数据文件放在运行时目录：standalone 为 exe 所在目录，
+        # onefile 为解包出的临时目录。
+        runtime_dir = getattr(compiled, "python_runtime_dir", None)
+        if runtime_dir:
+            candidates.append(Path(runtime_dir) / PACKAGED_CODEC_RELATIVE_DIR)
+
     if base_dir:
         base_path = Path(base_dir).resolve()
         candidates.extend(

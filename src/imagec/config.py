@@ -37,8 +37,16 @@ class AppPaths:
 
 
 def get_program_dir() -> Path:
+    # PyInstaller 设置 sys.frozen；Nuitka 不设置该属性，只注入模块级 __compiled__。
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
+
+    compiled = globals().get("__compiled__")
+    if compiled is not None:
+        # onefile 模式下 sys.executable 指向临时解包目录，
+        # 只有 containing_dir 才是用户实际放置 exe 的位置。
+        return Path(getattr(compiled, "containing_dir", sys.executable)).resolve()
+
     return Path(__file__).resolve().parents[2]
 
 
