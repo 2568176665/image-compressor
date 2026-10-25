@@ -6,6 +6,7 @@
 # Build outputs
 /build/
 /dist/
+/nuitka-dist/
 /nuitka-crash-report.xml
 /image_compressor.spec
 

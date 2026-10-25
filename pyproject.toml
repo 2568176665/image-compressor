@@ -17,6 +17,7 @@ packages = ["src/imagec"]
 
 [dependency-groups]
 dev = [
+    "nuitka>=4.3.1",
     "pyinstaller",
     "pytest",
 ]

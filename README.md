@@ -33,12 +33,25 @@ uv run pytest
 
 ## 打包
 
+PyInstaller（输出到 `dist/`）：
+
 ```bash
 uv run build.py
 uv run build.py --onefile
 ```
 
 默认生成 onedir 包（启动速度更快）；`--onefile` 生成单文件 EXE。两种模式都会内置编码器资源，打包前会校验资源清单，onedir 构建完成后还会再次校验输出目录。
+
+Nuitka（输出到 `nuitka-dist/`）：
+
+```bash
+uv run build-N.py
+uv run build-N.py --onefile
+```
+
+默认生成 `nuitka-dist/image_compressor.dist/`，`--onefile` 生成 `nuitka-dist/image_compressor.exe`，与 PyInstaller 的产物目录互不覆盖。Nuitka 首次构建会下载 MinGW 或 Dependency Walker 等依赖，需要联网和 MSVC Build Tools。
+
+Nuitka 不设置 `sys.frozen`，程序通过 `__compiled__` 判断冻结环境；onefile 下配置与日志写入 exe 所在目录，而不是临时解包目录。
 
 ## 第三方许可
 
