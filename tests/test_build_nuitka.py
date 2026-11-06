@@ -42,6 +42,15 @@ def test_build_command_uses_numeric_file_version() -> None:
     assert _option_values(command, "--product-version") == ["0.2.0.0"]
 
 
+def test_build_command_includes_optional_dnd_arguments(monkeypatch) -> None:
+    module = _load_build_n()
+    monkeypatch.setattr(module, "build_dnd_arguments", lambda: ["--include-package=tkinterdnd2"])
+
+    command = module.build_command("0.2.0", onefile=False)
+
+    assert "--include-package=tkinterdnd2" in command
+
+
 def test_build_command_selects_mode() -> None:
     module = _load_build_n()
 

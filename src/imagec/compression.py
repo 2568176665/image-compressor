@@ -9,7 +9,7 @@ import re
 import shutil
 import tempfile
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,6 +25,11 @@ DEFAULT_MAX_WORKERS_CAP = 4
 MAX_WORKERS_LIMIT = 16
 COMMAND_TIMEOUT_SECONDS = 600
 MAX_OUTPUT_NAME_ATTEMPTS = 1000
+OUTPUT_CONFLICT_MESSAGES = {
+    "self": "输出路径与源文件相同，已跳过",
+    "other_input": "输出会覆盖其他输入文件，已跳过",
+    "exhausted": "无法生成唯一的输出文件名",
+}
 RESIZE_PATTERN = re.compile(r"^\s*(?P<width>\d*)\s*x\s*(?P<height>\d*)\s*$", re.IGNORECASE)
 PERCENT_PATTERN = re.compile(r"^\s*(?P<percent>\d+(?:\.\d+)?)\s*%\s*$")
 
@@ -37,6 +42,7 @@ class CompressionRequest:
     output_format: str
     resize_value: str | None
     overwrite: bool = False
+    name_suffix: str = ""
 
 
 @dataclass(slots=True)
@@ -86,6 +92,43 @@ def collect_image_files(input_path: str) -> list[str] | None:
     return None
 
 
+def expand_input_paths(input_paths: Iterable[str]) -> tuple[list[str], list[str]]:
+    """把用户选择的路径（图片或文件夹）展开成去重后的图片文件列表。
+
+    返回 (可用图片, 无效路径)。文件夹只扫描当前层，与 collect_image_files 一致；
+    重复路径和大小写差异会被归一化去重，且保持用户选择的顺序。
+    """
+    image_files: list[str] = []
+    invalid_paths: list[str] = []
+    seen: set[str] = set()
+
+    for raw_path in input_paths:
+        candidate = str(raw_path).strip().strip('"')
+        if not candidate:
+            continue
+
+        expanded = os.path.expanduser(candidate)
+        if os.path.isfile(expanded):
+            candidates = [expanded]
+        elif os.path.isdir(expanded):
+            candidates = collect_image_files(expanded) or []
+        else:
+            invalid_paths.append(candidate)
+            continue
+
+        for item in candidates:
+            if Path(item).suffix.lower() not in IMAGE_SUFFIXES:
+                invalid_paths.append(item)
+                continue
+            key = os.path.normcase(os.path.abspath(item))
+            if key in seen:
+                continue
+            seen.add(key)
+            image_files.append(item)
+
+    return image_files, invalid_paths
+
+
 def move_into_place(source: Path, destination: Path) -> None:
     try:
         os.replace(source, destination)
@@ -109,6 +152,8 @@ class CompressionService:
         self.cancel_event = threading.Event()
         self._output_lock = threading.Lock()
         self._reserved_outputs: set[str] = set()
+        # 本批次里受保护的源文件路径：任何情况下都不能被输出覆盖。
+        self._protected_inputs: set[str] = set()
 
     def set_encoder_paths(self, encoder_paths: Mapping[str, str]) -> None:
         self.encoder_paths = {
@@ -121,23 +166,37 @@ class CompressionService:
 
     def reset(self) -> None:
         self.cancel_event.clear()
+        with self._output_lock:
+            self._reserved_outputs.clear()
 
     def run_batch(
         self,
         image_files: list[str],
         *,
-        output_dir: str,
+        output_dir: str = "",
         target_size: int,
         output_format: str,
         resize_value: str | None,
         max_workers: int,
         overwrite: bool = False,
+        name_suffix: str = "",
+        output_dir_resolver: Callable[[str], str] | None = None,
         progress_callback: Callable[[int, int, CompressionResult], None] | None = None,
     ) -> str:
+        if output_dir_resolver is None and not output_dir.strip():
+            raise ValueError("output_dir 与 output_dir_resolver 不能同时为空")
+
         self.reset()
+        # 整批输入路径都受保护：即使开启覆盖，也不能把输出写到其中任何一个文件上。
+        self._protected_inputs = {self._path_key(path) for path in image_files}
         completed = 0
         has_failure = False
         total = len(image_files)
+
+        def resolve_output_dir(image_file: str) -> str:
+            if output_dir_resolver is None:
+                return output_dir
+            return output_dir_resolver(image_file)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [
@@ -145,11 +204,12 @@ class CompressionService:
                     self.compress_file,
                     CompressionRequest(
                         input_file=image_file,
-                        output_dir=output_dir,
+                        output_dir=resolve_output_dir(image_file),
                         target_size=target_size,
                         output_format=output_format,
                         resize_value=resize_value,
                         overwrite=overwrite,
+                        name_suffix=name_suffix,
                     ),
                 )
                 for image_file in image_files
@@ -208,11 +268,18 @@ class CompressionService:
         if request.target_size <= 0:
             return CompressionResult(status="failed", message=f"失败: {input_path.stem} (目标大小无效)")
 
-        output_file = self._claim_output_file(output_dir, input_path, output_format, request.overwrite)
+        output_file, conflict = self._claim_output_file(
+            output_dir,
+            input_path,
+            output_format,
+            request.overwrite,
+            request.name_suffix,
+        )
         if output_file is None:
+            reason = OUTPUT_CONFLICT_MESSAGES.get(conflict, OUTPUT_CONFLICT_MESSAGES["exhausted"])
             return CompressionResult(
                 status="failed",
-                message=f"失败: {input_path.stem} (输出路径与源文件相同，已跳过)",
+                message=f"失败: {input_path.stem} ({reason})",
             )
 
         try:
@@ -303,26 +370,37 @@ class CompressionService:
         input_path: Path,
         output_format: str,
         overwrite: bool,
-    ) -> Path | None:
-        base = output_dir / f"{input_path.stem}.{output_format}"
+        name_suffix: str = "",
+    ) -> tuple[Path | None, str]:
+        stem = f"{input_path.stem}{name_suffix}"
+        base = output_dir / f"{stem}.{output_format}"
+        input_key = self._path_key(input_path)
         with self._output_lock:
             if overwrite:
-                try:
-                    if base.exists() and base.resolve() == input_path.resolve():
-                        return None
-                except OSError:
-                    pass
+                base_key = self._path_key(base)
+                if base_key == input_key:
+                    return None, "self"
+                if base_key in self._protected_inputs:
+                    return None, "other_input"
                 self._reserved_outputs.add(str(base).lower())
-                return base
+                return base, ""
 
             candidate = base
             for index in range(1, MAX_OUTPUT_NAME_ATTEMPTS + 1):
                 key = str(candidate).lower()
-                if key not in self._reserved_outputs and not candidate.exists():
+                if (
+                    key not in self._reserved_outputs
+                    and not candidate.exists()
+                    and self._path_key(candidate) not in self._protected_inputs
+                ):
                     self._reserved_outputs.add(key)
-                    return candidate
-                candidate = output_dir / f"{input_path.stem}-{index}.{output_format}"
-            return None
+                    return candidate, ""
+                candidate = output_dir / f"{stem}-{index}.{output_format}"
+            return None, "exhausted"
+
+    @staticmethod
+    def _path_key(path: Path | str) -> str:
+        return os.path.normcase(os.path.abspath(str(path)))
 
     def _release_output_file(self, output_file: Path) -> None:
         with self._output_lock:

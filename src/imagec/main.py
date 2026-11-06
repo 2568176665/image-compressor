@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import ctypes
 import os
-import tkinter as tk
 
 from .config import ConfigStore, configure_logging, resolve_app_paths
 from .runtime import CodecRuntimeManager
-from .ui import ImageCompressorApp
+from .ui import ImageCompressorApp, create_root
 
 
 def enable_dpi_awareness() -> None:
@@ -25,7 +24,7 @@ def main() -> int:
     enable_dpi_awareness()
     paths = resolve_app_paths()
     configure_logging(paths)
-    root = tk.Tk()
+    root = create_root()
     ImageCompressorApp(
         root,
         config_store=ConfigStore(paths),

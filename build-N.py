@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import subprocess
 import sys
@@ -103,6 +104,8 @@ def build_command(version: str, onefile: bool) -> list[str]:
         command.append("--enable-plugin=tk-inter")
         command.append(f"--tcl-library-dir={tcl_library_dir}")
 
+    command.extend(build_dnd_arguments())
+
     if ICON_FILE.exists():
         command.append(f"--windows-icon-from-ico={ICON_FILE}")
     else:
@@ -110,6 +113,14 @@ def build_command(version: str, onefile: bool) -> list[str]:
 
     command.append(str(ENTRY_SCRIPT))
     return command
+
+
+def build_dnd_arguments() -> list[str]:
+    """把 tkinterdnd2 包及其 tkdnd 数据一起打包，未安装时跳过。"""
+    if importlib.util.find_spec("tkinterdnd2") is None:
+        print("[build] tkinterdnd2 not installed, skip drag-and-drop resources")
+        return []
+    return ["--include-package=tkinterdnd2", "--include-package-data=tkinterdnd2"]
 
 
 def build(onefile: bool) -> Path:

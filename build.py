@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -161,6 +162,7 @@ def build(root: Path, onedir: bool) -> None:
         str(version_file),
     ]
     cmd.extend(build_codec_arguments(codec_resources))
+    cmd.extend(build_dnd_arguments())
 
     if onedir:
         cmd.append("--onedir")
@@ -292,6 +294,14 @@ def validate_build_output(output_path: Path, onedir: bool) -> None:
         missing = [name for name in required_names if name.encode("utf-8") not in payload]
         if missing:
             raise RuntimeError(f"Onefile 编码器资源未内置: {', '.join(missing)}")
+
+
+def build_dnd_arguments() -> list[str]:
+    """tkinterdnd2 携带 tkdnd 二进制资源，缺失时不需要额外参数。"""
+    if importlib.util.find_spec("tkinterdnd2") is None:
+        print("[build] tkinterdnd2 not installed, skip drag-and-drop resources")
+        return []
+    return ["--collect-data", "tkinterdnd2", "--hidden-import", "tkinterdnd2"]
 
 
 def build_codec_arguments(resource_files: list[Path]) -> list[str]:

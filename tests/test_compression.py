@@ -16,6 +16,7 @@ from imagec.compression import (
     CompressionService,
     TransformPlan,
     collect_image_files,
+    expand_input_paths,
     normalize_format,
     resolve_max_workers,
 )
@@ -112,6 +113,35 @@ def test_collect_image_files_includes_avif_and_is_case_insensitive(tmp_path: Pat
         str(folder / "c.avif"),
         str(folder / "d.jpeg"),
     ]
+
+
+def test_expand_input_paths_expands_folders_and_dedupes(tmp_path: Path) -> None:
+    folder = tmp_path / "folder"
+    folder.mkdir()
+    (folder / "a.jpg").write_bytes(b"x")
+    (folder / "b.PNG").write_bytes(b"x")
+    single = tmp_path / "single.webp"
+    single.write_bytes(b"x")
+    note = tmp_path / "note.txt"
+    note.write_bytes(b"x")
+    missing = tmp_path / "missing.jpg"
+
+    files, invalid = expand_input_paths(
+        [str(folder), str(single), str(single), str(missing), str(note), "   "]
+    )
+
+    assert files == [str(folder / "a.jpg"), str(folder / "b.PNG"), str(single)]
+    assert invalid == [str(missing), str(note)]
+
+
+def test_expand_input_paths_treats_file_dialog_quotes_as_path(tmp_path: Path) -> None:
+    image = tmp_path / "quoted.jpg"
+    image.write_bytes(b"x")
+
+    files, invalid = expand_input_paths([f'"{image}"'])
+
+    assert files == [str(image)]
+    assert invalid == []
 
 
 def test_percent_resize_is_applied_with_lanczos() -> None:
@@ -274,6 +304,104 @@ def test_output_is_overwritten_only_when_requested(tmp_path: Path) -> None:
     assert result.status == "completed"
     assert Path(result.output_file or "").name == "source.jpg"
     assert existing.read_bytes() != b"keep-me"
+
+
+def test_suffix_output_keeps_source_untouched_even_with_overwrite(tmp_path: Path) -> None:
+    source = tmp_path / "photo.jpg"
+    _write_image(source)
+    original = source.read_bytes()
+
+    result = _service([]).compress_file(
+        CompressionRequest(
+            str(source),
+            str(tmp_path),
+            20_000,
+            "jpg",
+            None,
+            overwrite=True,
+            name_suffix="_ic",
+        )
+    )
+
+    assert result.status == "completed"
+    assert Path(result.output_file or "").name == "photo_ic.jpg"
+    assert source.read_bytes() == original
+
+
+def test_suffix_output_appends_counter_when_suffixed_file_exists(tmp_path: Path) -> None:
+    source = tmp_path / "photo.jpg"
+    _write_image(source)
+    existing = tmp_path / "photo_ic.jpg"
+    existing.write_bytes(b"keep-me")
+
+    result = _service([]).compress_file(
+        CompressionRequest(str(source), str(tmp_path), 20_000, "jpg", None, name_suffix="_ic")
+    )
+
+    assert result.status == "completed"
+    assert Path(result.output_file or "").name == "photo_ic-1.jpg"
+    assert existing.read_bytes() == b"keep-me"
+
+
+def test_overwrite_mode_refuses_to_hit_another_input_file(tmp_path: Path) -> None:
+    first = tmp_path / "photo.jpg"
+    second = tmp_path / "photo_ic.jpg"
+    _write_image(first)
+    _write_image(second)
+    original_second = second.read_bytes()
+
+    status = _service([]).run_batch(
+        [str(first), str(second)],
+        target_size=20_000,
+        output_format="jpg",
+        resize_value=None,
+        max_workers=1,
+        overwrite=True,
+        name_suffix="_ic",
+        output_dir_resolver=lambda image_file: str(Path(image_file).parent),
+    )
+
+    assert status == "failed"
+    assert second.read_bytes() == original_second
+
+
+def test_batch_resolves_output_directory_per_file(tmp_path: Path) -> None:
+    first_dir = tmp_path / "one"
+    second_dir = tmp_path / "two"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    first = first_dir / "a.jpg"
+    second = second_dir / "a.jpg"
+    _write_image(first)
+    _write_image(second)
+
+    status = _service([]).run_batch(
+        [str(first), str(second)],
+        target_size=20_000,
+        output_format="jpg",
+        resize_value=None,
+        max_workers=2,
+        name_suffix="_ic",
+        output_dir_resolver=lambda image_file: str(Path(image_file).parent / "compressed"),
+    )
+
+    assert status == "completed"
+    assert (first_dir / "compressed" / "a_ic.jpg").is_file()
+    assert (second_dir / "compressed" / "a_ic.jpg").is_file()
+
+
+def test_run_batch_requires_an_output_target(tmp_path: Path) -> None:
+    source = tmp_path / "a.jpg"
+    _write_image(source)
+
+    with pytest.raises(ValueError):
+        _service([]).run_batch(
+            [str(source)],
+            target_size=20_000,
+            output_format="jpg",
+            resize_value=None,
+            max_workers=1,
+        )
 
 
 def test_parallel_same_stem_inputs_get_distinct_outputs(tmp_path: Path) -> None:

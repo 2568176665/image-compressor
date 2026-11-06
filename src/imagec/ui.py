@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -9,20 +10,48 @@ from .compression import (
     SUPPORTED_FORMATS,
     CompressionResult,
     CompressionService,
-    collect_image_files,
+    expand_input_paths,
     normalize_format,
     resolve_max_workers,
 )
-from .config import DEFAULT_CONFIG, ConfigStore, derive_output_path
+from .config import (
+    DEFAULT_CONFIG,
+    OUTPUT_MODE_CUSTOM,
+    OUTPUT_MODE_KEYS,
+    OUTPUT_MODE_LABELS,
+    ConfigStore,
+    normalize_output_mode,
+    output_name_suffix,
+    resolve_output_dir,
+)
 from .runtime import CodecRuntimeManager, EnsureResult
+
+try:  # 可选依赖：缺失时只是不支持拖拽，其余功能不受影响。
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+except Exception:  # pragma: no cover - 依赖缺失时走降级分支
+    DND_FILES = None  # type: ignore[assignment]
+    TkinterDnD = None  # type: ignore[assignment]
+
+DND_SUPPORTED = TkinterDnD is not None and DND_FILES is not None
+FILE_DIALOG_TYPES = [
+    ("图片文件", "*.jpg *.jpeg *.png *.webp *.avif"),
+    ("所有文件", "*.*"),
+]
+
+
+def create_root() -> tk.Tk:
+    """创建根窗口；装了 tkinterdnd2 时同时获得拖拽能力。"""
+    if DND_SUPPORTED:
+        return TkinterDnD.Tk()  # type: ignore[union-attr]
+    return tk.Tk()
 
 
 class ImageCompressorApp:
     def __init__(self, root: tk.Tk, *, config_store: ConfigStore, runtime_manager: CodecRuntimeManager):
         self.root = root
         self.root.title("图片压缩工具")
-        self.root.geometry("600x430")
-        self.root.resizable(False, False)
+        self.root.geometry("820x640")
+        self.root.minsize(760, 560)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.grid_columnconfigure(0, weight=1)
         self.root.grid_rowconfigure(0, weight=1)
@@ -32,17 +61,18 @@ class ImageCompressorApp:
         self.runtime_result: EnsureResult | None = None
         self.service = CompressionService(encoder_paths=None)
         self.is_compressing = False
+        self.input_paths: list[str] = []
 
-        self.auto_output_var = tk.BooleanVar(value=True)
         self.overwrite_var = tk.BooleanVar(value=False)
-        self.input_path_var = tk.StringVar(value=str(DEFAULT_CONFIG["input_path"]))
-        self.output_path_var = tk.StringVar()
+        default_mode = normalize_output_mode(DEFAULT_CONFIG["output_mode"])
+        self.output_mode_var = tk.StringVar(value=OUTPUT_MODE_LABELS[default_mode])
+        self.custom_output_dir_var = tk.StringVar()
         self.format_var = tk.StringVar(value=str(DEFAULT_CONFIG["format"]))
 
         self.build_ui()
         self.bind_events()
         self.load_config()
-        self.update_output_path_mode()
+        self.update_custom_output_state()
         self.start_runtime_check()
 
     def build_ui(self) -> None:
@@ -50,62 +80,103 @@ class ImageCompressorApp:
         main_frame.grid(row=0, column=0, sticky="nsew")
         main_frame.grid_columnconfigure(1, weight=1)
         main_frame.grid_columnconfigure(3, weight=1)
+        main_frame.grid_rowconfigure(0, weight=2)
         main_frame.grid_rowconfigure(8, weight=1)
 
         field_width = 18
         button_width = 10
         row_padding = 4
 
-        tk.Label(main_frame, text="输入路径:").grid(row=0, column=0, padx=(0, 8), pady=row_padding, sticky="e")
-        self.input_entry = tk.Entry(main_frame, textvariable=self.input_path_var)
-        self.input_entry.grid(row=0, column=1, pady=row_padding, sticky="ew")
+        tk.Label(main_frame, text="输入图片:").grid(row=0, column=0, padx=(0, 8), pady=row_padding, sticky="ne")
+        input_frame = tk.Frame(main_frame)
+        input_frame.grid(row=0, column=1, columnspan=3, pady=row_padding, sticky="nsew")
+        input_frame.grid_columnconfigure(0, weight=1)
+        input_frame.grid_rowconfigure(0, weight=1)
 
-        input_actions = tk.Frame(main_frame)
-        input_actions.grid(row=0, column=2, columnspan=2, padx=(8, 0), pady=row_padding, sticky="e")
-        tk.Button(input_actions, text="选择文件", command=self.select_file, width=button_width).grid(row=0, column=0, padx=(0, 6))
-        tk.Button(input_actions, text="选择文件夹", command=self.select_folder, width=button_width).grid(row=0, column=1)
-
-        tk.Label(main_frame, text="输出路径:").grid(row=1, column=0, padx=(0, 8), pady=row_padding, sticky="e")
-        self.output_entry = tk.Entry(main_frame, textvariable=self.output_path_var)
-        self.output_entry.grid(row=1, column=1, pady=row_padding, sticky="ew")
-
-        output_actions = tk.Frame(main_frame)
-        output_actions.grid(row=1, column=2, columnspan=2, padx=(8, 0), pady=row_padding, sticky="e")
-        self.auto_output_button = ttk.Checkbutton(
-            output_actions,
-            text="自动输出",
-            variable=self.auto_output_var,
-            command=self.update_output_path_mode,
+        self.input_listbox = tk.Listbox(
+            input_frame,
+            selectmode=tk.EXTENDED,
+            exportselection=False,
+            height=8,
+            activestyle="none",
         )
-        self.auto_output_button.grid(row=0, column=0, padx=(0, 6))
-        self.output_button = tk.Button(
-            output_actions,
+        self.input_listbox.grid(row=0, column=0, sticky="nsew")
+        input_scroll = ttk.Scrollbar(input_frame, orient="vertical", command=self.input_listbox.yview)
+        input_scroll.grid(row=0, column=1, sticky="ns")
+        self.input_listbox.config(yscrollcommand=input_scroll.set)
+
+        input_actions = tk.Frame(input_frame)
+        input_actions.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        input_actions.grid_columnconfigure(0, weight=1)
+
+        hint_text = "支持拖拽图片或文件夹到列表" if DND_SUPPORTED else "点击“添加”选择图片或文件夹"
+        self.input_hint = tk.Label(input_actions, text=hint_text, fg="#666666")
+        self.input_hint.grid(row=0, column=0, sticky="w")
+
+        input_buttons = tk.Frame(input_actions)
+        input_buttons.grid(row=0, column=1, sticky="e")
+
+        # 用普通 tk.Button + 弹出菜单，保证与“移除选中”“清空”外观完全一致。
+        self.add_button = tk.Button(input_buttons, text="添加 ▾", command=self.show_add_menu, width=button_width)
+        self.add_button.grid(row=0, column=0, padx=(0, 6))
+
+        self.add_menu = tk.Menu(self.add_button, tearoff=False)
+        self.add_menu.add_command(label="选择图片（可多选）", command=self.select_images)
+        self.add_menu.add_command(label="选择文件夹", command=self.select_input_folder)
+
+        self.remove_button = tk.Button(
+            input_buttons, text="移除选中", command=self.remove_selected, width=button_width
+        )
+        self.remove_button.grid(row=0, column=1, padx=(0, 6))
+
+        self.clear_button = tk.Button(input_buttons, text="清空", command=self.clear_inputs, width=8)
+        self.clear_button.grid(row=0, column=2)
+
+        tk.Label(main_frame, text="输出方式:").grid(row=1, column=0, padx=(0, 8), pady=row_padding, sticky="e")
+        output_frame = tk.Frame(main_frame)
+        output_frame.grid(row=1, column=1, columnspan=3, pady=row_padding, sticky="ew")
+        output_frame.grid_columnconfigure(1, weight=1)
+
+        self.output_mode_combo = ttk.Combobox(
+            output_frame,
+            textvariable=self.output_mode_var,
+            values=list(OUTPUT_MODE_LABELS.values()),
+            state="readonly",
+            width=22,
+        )
+        self.output_mode_combo.grid(row=0, column=0, sticky="w")
+
+        self.custom_output_entry = tk.Entry(output_frame, textvariable=self.custom_output_dir_var)
+        self.custom_output_entry.grid(row=0, column=1, padx=(8, 8), sticky="ew")
+
+        self.custom_output_button = tk.Button(
+            output_frame,
             text="选择文件夹",
-            command=self.select_output_folder,
+            command=self.select_custom_output_dir,
             width=button_width,
         )
-        self.output_button.grid(row=0, column=1)
+        self.custom_output_button.grid(row=0, column=2, sticky="e")
 
-        tk.Label(main_frame, text="最大大小 (KB):", font=("Segoe UI", 9)).grid(row=2, column=0, padx=(0, 8), pady=row_padding, sticky="e")
+        tk.Label(main_frame, text="最大大小 (KB):", font=("Segoe UI", 9)).grid(
+            row=2, column=0, padx=(0, 8), pady=row_padding, sticky="e"
+        )
         self.size_entry = tk.Entry(main_frame, width=field_width)
         self.size_entry.grid(row=2, column=1, pady=row_padding, sticky="ew")
 
-        tk.Label(main_frame, text="Resize (宽x高/百分比%):", font=("Segoe UI", 9)).grid(row=2, column=2, padx=(12, 8), pady=row_padding, sticky="e")
-        resize_frame = tk.Frame(main_frame)
-        resize_frame.grid(row=2, column=3, pady=row_padding, sticky="ew")
-        resize_frame.grid_columnconfigure(0, weight=1)
-        self.resize_entry = tk.Entry(resize_frame, width=field_width)
-        self.resize_entry.grid(row=0, column=0, sticky="ew")
+        tk.Label(main_frame, text="Resize (宽x高/百分比%):", font=("Segoe UI", 9)).grid(
+            row=2, column=2, padx=(12, 8), pady=row_padding, sticky="e"
+        )
+        self.resize_entry = tk.Entry(main_frame, width=field_width)
+        self.resize_entry.grid(row=2, column=3, pady=row_padding, sticky="ew")
 
         tk.Label(main_frame, text="输出格式:").grid(row=3, column=0, padx=(0, 8), pady=row_padding, sticky="e")
-        format_combo = ttk.Combobox(
+        ttk.Combobox(
             main_frame,
             textvariable=self.format_var,
             values=list(SUPPORTED_FORMATS),
             state="readonly",
             width=field_width,
-        )
-        format_combo.grid(row=3, column=1, pady=row_padding, sticky="ew")
+        ).grid(row=3, column=1, pady=row_padding, sticky="ew")
 
         tk.Label(main_frame, text="最大线程数:").grid(row=3, column=2, padx=(12, 8), pady=row_padding, sticky="e")
         self.max_workers_entry = tk.Entry(main_frame, width=field_width)
@@ -151,51 +222,111 @@ class ImageCompressorApp:
         self.log_text.grid(row=8, column=0, columnspan=4, sticky="nsew")
 
     def bind_events(self) -> None:
-        self.input_path_var.trace_add("write", self.on_input_path_changed)
+        self.output_mode_combo.bind("<<ComboboxSelected>>", lambda _event: self.update_custom_output_state())
+        self.setup_drag_and_drop()
 
-    def on_input_path_changed(self, *_args) -> None:
-        if self.auto_output_var.get():
-            self.sync_output_path()
+    def setup_drag_and_drop(self) -> None:
+        if not DND_SUPPORTED:
+            return
+        self.input_listbox.drop_target_register(DND_FILES)  # type: ignore[attr-defined]
+        self.input_listbox.dnd_bind("<<Drop>>", self.on_drop)  # type: ignore[attr-defined]
 
-    def update_output_path_mode(self) -> None:
-        if self.auto_output_var.get():
-            self.sync_output_path()
-            self.output_entry.config(state="disabled")
-            self.output_button.config(state="disabled")
-        else:
-            self.output_entry.config(state="normal")
-            self.output_button.config(state="normal")
+    def on_drop(self, event) -> str:
+        try:
+            dropped_paths = list(self.root.tk.splitlist(event.data))
+        except tk.TclError:
+            dropped_paths = [str(event.data)]
+        self.add_paths(dropped_paths)
+        return getattr(event, "action", "copy")
 
-    def sync_output_path(self) -> None:
-        self.output_path_var.set(derive_output_path(self.input_path_var.get()))
+    def current_output_mode(self) -> str:
+        return normalize_output_mode(
+            OUTPUT_MODE_KEYS.get(self.output_mode_var.get(), DEFAULT_CONFIG["output_mode"])
+        )
+
+    def update_custom_output_state(self) -> None:
+        state = "normal" if self.current_output_mode() == OUTPUT_MODE_CUSTOM else "disabled"
+        self.custom_output_entry.config(state=state)
+        self.custom_output_button.config(state=state)
 
     def get_resize_value(self) -> str | None:
         value = self.resize_entry.get().strip()
         return value or None
 
-    def select_file(self) -> None:
-        file_path = filedialog.askopenfilename(
-            filetypes=[("Image files", "*.jpg *.jpeg *.png *.webp *.avif")]
-        )
-        if file_path:
-            self.input_path_var.set(file_path)
+    def show_add_menu(self) -> None:
+        x = self.add_button.winfo_rootx()
+        y = self.add_button.winfo_rooty() + self.add_button.winfo_height()
+        try:
+            self.add_menu.tk_popup(x, y)
+        finally:
+            self.add_menu.grab_release()
 
-    def select_folder(self) -> None:
-        folder_path = filedialog.askdirectory()
-        if folder_path:
-            self.input_path_var.set(folder_path)
+    def select_images(self) -> None:
+        selected = filedialog.askopenfilenames(title="选择图片", filetypes=FILE_DIALOG_TYPES)
+        if selected:
+            self.add_paths(list(selected))
 
-    def select_output_folder(self) -> None:
-        folder_path = filedialog.askdirectory()
+    def select_input_folder(self) -> None:
+        folder_path = filedialog.askdirectory(title="选择文件夹")
         if folder_path:
-            self.output_path_var.set(folder_path)
+            self.add_paths([folder_path])
+
+    def select_custom_output_dir(self) -> None:
+        folder_path = filedialog.askdirectory(title="选择输出目录")
+        if folder_path:
+            self.custom_output_dir_var.set(folder_path)
+
+    def add_paths(self, paths: list[str]) -> None:
+        if not paths:
+            return
+
+        image_files, invalid_paths = expand_input_paths(paths)
+        known = {os.path.normcase(os.path.abspath(item)) for item in self.input_paths}
+        added = 0
+        for image_file in image_files:
+            key = os.path.normcase(os.path.abspath(image_file))
+            if key in known:
+                continue
+            known.add(key)
+            self.input_paths.append(image_file)
+            added += 1
+
+        self.refresh_input_listbox()
+
+        if added:
+            self.append_log(f"已添加 {added} 张图片，当前共 {len(self.input_paths)} 张")
+        elif image_files:
+            messagebox.showinfo("提示", "所选图片已经在列表里了。")
+        elif invalid_paths:
+            messagebox.showwarning("提示", "所选路径中没有可用的图片文件。")
+        else:
+            messagebox.showinfo("提示", "所选文件夹中没有图片文件。")
+
+    def refresh_input_listbox(self) -> None:
+        self.input_listbox.delete(0, tk.END)
+        for path in self.input_paths:
+            self.input_listbox.insert(tk.END, path)
+
+    def remove_selected(self) -> None:
+        selection = set(self.input_listbox.curselection())
+        if not selection:
+            return
+        self.input_paths = [path for index, path in enumerate(self.input_paths) if index not in selection]
+        self.refresh_input_listbox()
+
+    def clear_inputs(self) -> None:
+        if not self.input_paths:
+            return
+        self.input_paths.clear()
+        self.refresh_input_listbox()
 
     def load_config(self) -> None:
         config = self.config_store.load()
-        self.input_path_var.set(str(config.get("input_path", DEFAULT_CONFIG["input_path"])))
-        self.auto_output_var.set(bool(config.get("auto_output", DEFAULT_CONFIG["auto_output"])))
+        self.apply_input_paths(config.get("input_paths", DEFAULT_CONFIG["input_paths"]))
+        configured_mode = normalize_output_mode(config.get("output_mode", DEFAULT_CONFIG["output_mode"]))
+        self.output_mode_var.set(OUTPUT_MODE_LABELS[configured_mode])
+        self.custom_output_dir_var.set(str(config.get("custom_output_dir", "") or ""))
         self.overwrite_var.set(bool(config.get("overwrite", DEFAULT_CONFIG["overwrite"])))
-        self.output_path_var.set(str(config.get("output_path", DEFAULT_CONFIG["output_path"])))
         configured_format = normalize_format(str(config.get("format", DEFAULT_CONFIG["format"])))
         self.format_var.set(configured_format if configured_format in SUPPORTED_FORMATS else str(DEFAULT_CONFIG["format"]))
 
@@ -209,17 +340,26 @@ class ImageCompressorApp:
         configured_resize = str(config.get("resize", DEFAULT_CONFIG["resize"]))
         self.resize_entry.insert(0, "" if configured_resize == "不使用" else configured_resize)
 
+    def apply_input_paths(self, paths: object) -> None:
+        candidates = [str(item).strip() for item in (paths or []) if str(item).strip()]  # type: ignore[union-attr]
+        existing = [path for path in candidates if os.path.isfile(path)]
+        self.input_paths = existing
+        self.refresh_input_listbox()
+        missing_count = len(candidates) - len(existing)
+        if missing_count > 0:
+            self.append_log(f"已跳过 {missing_count} 个不存在的历史路径")
+
     def save_config(self) -> None:
         self.config_store.save(
             {
-                "input_path": self.input_path_var.get(),
-                "auto_output": self.auto_output_var.get(),
-                "overwrite": self.overwrite_var.get(),
-                "output_path": self.output_path_var.get(),
+                "input_paths": list(self.input_paths),
+                "output_mode": self.current_output_mode(),
+                "custom_output_dir": self.custom_output_dir_var.get().strip(),
                 "target_size_kb": self.size_entry.get(),
                 "resize": self.resize_entry.get().strip() or "不使用",
                 "format": self.format_var.get(),
                 "max_workers": self.max_workers_entry.get(),
+                "overwrite": self.overwrite_var.get(),
             }
         )
 
@@ -245,13 +385,16 @@ class ImageCompressorApp:
             messagebox.showwarning("提示", "编码器尚未准备完成，请稍后再试。")
             return
 
-        input_path = self.input_entry.get().strip()
-        output_path = self.output_entry.get().strip()
-        target_size_kb = self.size_entry.get().strip()
-        if not input_path or not output_path or not target_size_kb:
-            messagebox.showerror("错误", "请填写所有字段")
+        output_mode = self.current_output_mode()
+        custom_output_dir = self.custom_output_dir_var.get().strip()
+        if output_mode == OUTPUT_MODE_CUSTOM and not custom_output_dir:
+            messagebox.showerror("错误", "请先选择自定义输出目录")
             return
 
+        target_size_kb = self.size_entry.get().strip()
+        if not target_size_kb:
+            messagebox.showerror("错误", "请填写目标大小")
+            return
         try:
             target_size = int(target_size_kb) * 1024
         except ValueError:
@@ -261,12 +404,15 @@ class ImageCompressorApp:
             messagebox.showerror("错误", "目标大小必须大于 0")
             return
 
-        image_files = collect_image_files(input_path)
-        if image_files is None:
-            messagebox.showerror("错误", "输入路径无效")
-            return
+        missing = [path for path in self.input_paths if not os.path.isfile(path)]
+        if missing:
+            self.input_paths = [path for path in self.input_paths if os.path.isfile(path)]
+            self.refresh_input_listbox()
+            self.append_log(f"已移除 {len(missing)} 个不存在的输入文件")
+
+        image_files = list(self.input_paths)
         if not image_files:
-            messagebox.showerror("错误", "未找到图片文件")
+            messagebox.showerror("错误", "请先添加图片")
             return
 
         max_workers = resolve_max_workers(self.max_workers_entry.get())
@@ -275,14 +421,16 @@ class ImageCompressorApp:
         self.compress_button.config(state="disabled")
         self.cancel_button.config(state="normal")
         self.is_compressing = True
-        self.append_log("开始压缩任务")
-        logging.info("开始压缩任务")
+        summary = f"开始压缩任务（{len(image_files)} 张，输出方式：{OUTPUT_MODE_LABELS[output_mode]}）"
+        self.append_log(summary)
+        logging.info(summary)
 
         threading.Thread(
             target=self.run_tasks,
             args=(
                 image_files,
-                output_path,
+                output_mode,
+                custom_output_dir,
                 target_size,
                 self.format_var.get(),
                 self.get_resize_value(),
@@ -295,7 +443,8 @@ class ImageCompressorApp:
     def run_tasks(
         self,
         image_files: list[str],
-        output_path: str,
+        output_mode: str,
+        custom_output_dir: str,
         target_size: int,
         output_format: str,
         resize_value: str | None,
@@ -306,12 +455,15 @@ class ImageCompressorApp:
         try:
             status = self.service.run_batch(
                 image_files,
-                output_dir=output_path,
                 target_size=target_size,
                 output_format=output_format,
                 resize_value=resize_value,
                 max_workers=max_workers,
                 overwrite=overwrite,
+                name_suffix=output_name_suffix(output_mode),
+                output_dir_resolver=lambda image_file: resolve_output_dir(
+                    output_mode, image_file, custom_output_dir
+                ),
                 progress_callback=self._on_progress,
             )
         except Exception:

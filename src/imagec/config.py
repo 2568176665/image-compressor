@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import logging.handlers
@@ -14,10 +15,26 @@ CONFIG_FILENAME = "config.json"
 LOG_FILENAME = "compression.log"
 LOG_MAX_BYTES = 1024 * 1024
 LOG_BACKUP_COUNT = 3
-DEFAULT_CONFIG: dict[str, str | bool] = {
-    "input_path": os.path.join(".", "input"),
-    "auto_output": True,
-    "output_path": "",
+# 输出方式：决定每张图片的输出目录，以及是否需要追加防覆盖后缀。
+OUTPUT_MODE_SIBLING = "sibling"
+OUTPUT_MODE_COMPRESSED = "sibling_compressed"
+OUTPUT_MODE_CUSTOM = "custom"
+OUTPUT_MODE_LABELS: dict[str, str] = {
+    OUTPUT_MODE_SIBLING: "原图同目录",
+    OUTPUT_MODE_COMPRESSED: "原图同目录\\compressed",
+    OUTPUT_MODE_CUSTOM: "自定义目录…",
+}
+OUTPUT_MODE_KEYS: dict[str, str] = {
+    label: mode for mode, label in OUTPUT_MODE_LABELS.items()
+}
+OUTPUT_SUBDIR_NAME = "compressed"
+# 自动输出（同目录/同目录子目录）时统一加后缀，避免与源图重名，也便于把产物和原图区分开。
+AUTO_OUTPUT_NAME_SUFFIX = "_ic"
+
+DEFAULT_CONFIG: dict[str, object] = {
+    "input_paths": [],
+    "output_mode": OUTPUT_MODE_COMPRESSED,
+    "custom_output_dir": "",
     "target_size_kb": "100",
     "resize": "不使用",
     "format": "jpg",
@@ -95,7 +112,7 @@ class ConfigStore:
         self.legacy_config_path = paths.legacy_config_path
 
     def load(self) -> dict:
-        config = DEFAULT_CONFIG.copy()
+        config = copy.deepcopy(DEFAULT_CONFIG)
         for candidate in self._load_candidates():
             if not candidate.exists():
                 continue
@@ -107,13 +124,15 @@ class ConfigStore:
             if isinstance(loaded, dict):
                 config.update({key: value for key, value in loaded.items() if key in DEFAULT_CONFIG})
             break
+        config["input_paths"] = coerce_input_paths(config.get("input_paths"))
         return config
 
     def save(self, config: dict) -> Path:
         target = self.paths.config_path
         target.parent.mkdir(parents=True, exist_ok=True)
-        payload = DEFAULT_CONFIG.copy()
+        payload = copy.deepcopy(DEFAULT_CONFIG)
         payload.update(config)
+        payload["input_paths"] = coerce_input_paths(payload.get("input_paths"))
         with target.open("w", encoding="utf-8") as file_obj:
             json.dump(payload, file_obj, ensure_ascii=False, indent=2)
         return target
@@ -142,21 +161,43 @@ def configure_logging(paths: AppPaths) -> None:
     )
 
 
-def derive_output_path(input_path: str) -> str:
-    normalized_path = input_path.strip()
-    if not normalized_path:
-        return os.path.join(".", "output")
+def coerce_input_paths(value: object) -> list[str]:
+    """把配置里的输入列表清洗成非空字符串列表，兼容旧版字符串写法。"""
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if not isinstance(value, (list, tuple)):
+        return []
+    paths: list[str] = []
+    for item in value:
+        text = str(item).strip()
+        if text:
+            paths.append(text)
+    return paths
 
-    expanded_path = os.path.expanduser(normalized_path)
-    expanded = Path(expanded_path)
 
-    if expanded.is_file():
-        base_dir = expanded.parent
-    elif expanded.is_dir():
-        base_dir = expanded
-    elif expanded.suffix.lower() in IMAGE_SUFFIXES:
-        base_dir = expanded.parent if str(expanded.parent) else Path(".")
-    else:
-        base_dir = expanded
+def normalize_output_mode(value: object) -> str:
+    mode = str(value or "").strip()
+    return mode if mode in OUTPUT_MODE_LABELS else OUTPUT_MODE_COMPRESSED
 
-    return str(base_dir / "output")
+
+def output_name_suffix(mode: str) -> str:
+    """自动输出方式下给输出文件名追加的后缀；自定义目录保持原有命名。"""
+    return "" if normalize_output_mode(mode) == OUTPUT_MODE_CUSTOM else AUTO_OUTPUT_NAME_SUFFIX
+
+
+def resolve_output_dir(mode: str, input_file: str, custom_dir: str = "") -> str:
+    """按输出方式解析单张图片的输出目录。"""
+    normalized_mode = normalize_output_mode(mode)
+
+    if normalized_mode == OUTPUT_MODE_CUSTOM:
+        target = os.path.expanduser(custom_dir.strip())
+        if not target:
+            raise ValueError("自定义输出目录未设置")
+        return str(Path(target))
+
+    source = os.path.expanduser(input_file.strip())
+    base_dir = Path(source).parent if source else Path(".")
+
+    if normalized_mode == OUTPUT_MODE_SIBLING:
+        return str(base_dir)
+    return str(base_dir / OUTPUT_SUBDIR_NAME)

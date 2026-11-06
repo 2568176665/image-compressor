@@ -29,6 +29,25 @@ def test_collect_garbage_paths_prunes_removable_and_excluded_directories(tmp_pat
     assert not (tmp_path / "src" / "nested" / "module.pyc").exists()
 
 
+def test_build_dnd_arguments_are_skipped_without_dependency(monkeypatch) -> None:
+    import build
+
+    monkeypatch.setattr(build.importlib.util, "find_spec", lambda _name: None)
+
+    assert build.build_dnd_arguments() == []
+
+
+def test_build_dnd_arguments_collect_tkdnd_data(monkeypatch) -> None:
+    import build
+
+    monkeypatch.setattr(build.importlib.util, "find_spec", lambda _name: object())
+
+    arguments = build.build_dnd_arguments()
+
+    assert arguments[:2] == ["--collect-data", "tkinterdnd2"]
+    assert "tkinterdnd2" in arguments
+
+
 def test_build_codec_arguments_keeps_codec_files_as_unchanged_data() -> None:
     from build import CODEC_RESOURCE_DIR
 
