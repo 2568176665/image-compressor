@@ -104,10 +104,15 @@ def test_ui_custom_output_entry_toggles_with_output_mode(monkeypatch, tmp_path: 
     root, app = _make_app(monkeypatch, tmp_path)
     try:
         assert str(app.custom_output_entry["state"]) == "disabled"
+        assert app.custom_output_entry.winfo_manager() == ""
         app.output_mode_var.set(OUTPUT_MODE_LABELS[OUTPUT_MODE_CUSTOM])
         app.update_custom_output_state()
         assert str(app.custom_output_entry["state"]) == "normal"
         assert str(app.custom_output_button["state"]) == "normal"
+        assert app.custom_output_entry.winfo_manager() == "grid"
+        app.output_mode_var.set(OUTPUT_MODE_LABELS[OUTPUT_MODE_SIBLING])
+        app.update_custom_output_state()
+        assert app.custom_output_entry.winfo_manager() == ""
     finally:
         root.destroy()
 

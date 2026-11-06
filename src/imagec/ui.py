@@ -50,8 +50,6 @@ class ImageCompressorApp:
     def __init__(self, root: tk.Tk, *, config_store: ConfigStore, runtime_manager: CodecRuntimeManager):
         self.root = root
         self.root.title("图片压缩工具")
-        self.root.geometry("820x640")
-        self.root.minsize(760, 560)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.grid_columnconfigure(0, weight=1)
         self.root.grid_rowconfigure(0, weight=1)
@@ -73,153 +71,165 @@ class ImageCompressorApp:
         self.bind_events()
         self.load_config()
         self.update_custom_output_state()
+        self.fit_window()
         self.start_runtime_check()
 
     def build_ui(self) -> None:
-        main_frame = tk.Frame(self.root, padx=10, pady=8)
-        main_frame.grid(row=0, column=0, sticky="nsew")
-        main_frame.grid_columnconfigure(1, weight=1)
-        main_frame.grid_columnconfigure(3, weight=1)
-        main_frame.grid_rowconfigure(0, weight=2)
-        main_frame.grid_rowconfigure(8, weight=1)
+        main = ttk.Frame(self.root, padding=(10, 8))
+        main.grid(row=0, column=0, sticky="nsew")
+        main.grid_columnconfigure(0, weight=1)
+        main.grid_rowconfigure(0, weight=3)
+        main.grid_rowconfigure(5, weight=2)
 
-        field_width = 18
-        button_width = 10
-        row_padding = 4
-
-        tk.Label(main_frame, text="输入图片:").grid(row=0, column=0, padx=(0, 8), pady=row_padding, sticky="ne")
-        input_frame = tk.Frame(main_frame)
-        input_frame.grid(row=0, column=1, columnspan=3, pady=row_padding, sticky="nsew")
-        input_frame.grid_columnconfigure(0, weight=1)
-        input_frame.grid_rowconfigure(0, weight=1)
+        input_group = ttk.LabelFrame(main, text="输入图片", padding=(8, 6))
+        input_group.grid(row=0, column=0, sticky="nsew")
+        input_group.grid_columnconfigure(0, weight=1)
+        input_group.grid_rowconfigure(0, weight=1)
 
         self.input_listbox = tk.Listbox(
-            input_frame,
+            input_group,
             selectmode=tk.EXTENDED,
             exportselection=False,
-            height=8,
+            height=6,
+            width=52,
             activestyle="none",
         )
         self.input_listbox.grid(row=0, column=0, sticky="nsew")
-        input_scroll = ttk.Scrollbar(input_frame, orient="vertical", command=self.input_listbox.yview)
+        input_scroll = ttk.Scrollbar(input_group, orient="vertical", command=self.input_listbox.yview)
         input_scroll.grid(row=0, column=1, sticky="ns")
         self.input_listbox.config(yscrollcommand=input_scroll.set)
 
-        input_actions = tk.Frame(input_frame)
+        input_actions = ttk.Frame(input_group)
         input_actions.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         input_actions.grid_columnconfigure(0, weight=1)
 
         hint_text = "支持拖拽图片或文件夹到列表" if DND_SUPPORTED else "点击“添加”选择图片或文件夹"
-        self.input_hint = tk.Label(input_actions, text=hint_text, fg="#666666")
-        self.input_hint.grid(row=0, column=0, sticky="w")
+        ttk.Label(input_actions, text=hint_text, foreground="#777777").grid(row=0, column=0, sticky="w")
 
-        input_buttons = tk.Frame(input_actions)
+        input_buttons = ttk.Frame(input_actions)
         input_buttons.grid(row=0, column=1, sticky="e")
 
         # 用普通 tk.Button + 弹出菜单，保证与“移除选中”“清空”外观完全一致。
-        self.add_button = tk.Button(input_buttons, text="添加 ▾", command=self.show_add_menu, width=button_width)
-        self.add_button.grid(row=0, column=0, padx=(0, 6))
+        self.add_button = tk.Button(input_buttons, text="添加 ▾", command=self.show_add_menu, width=9)
+        self.add_button.grid(row=0, column=0, padx=(0, 4))
 
         self.add_menu = tk.Menu(self.add_button, tearoff=False)
         self.add_menu.add_command(label="选择图片（可多选）", command=self.select_images)
         self.add_menu.add_command(label="选择文件夹", command=self.select_input_folder)
 
         self.remove_button = tk.Button(
-            input_buttons, text="移除选中", command=self.remove_selected, width=button_width
+            input_buttons, text="移除选中", command=self.remove_selected, width=9
         )
-        self.remove_button.grid(row=0, column=1, padx=(0, 6))
+        self.remove_button.grid(row=0, column=1, padx=(0, 4))
 
-        self.clear_button = tk.Button(input_buttons, text="清空", command=self.clear_inputs, width=8)
+        self.clear_button = tk.Button(input_buttons, text="清空", command=self.clear_inputs, width=6)
         self.clear_button.grid(row=0, column=2)
 
-        tk.Label(main_frame, text="输出方式:").grid(row=1, column=0, padx=(0, 8), pady=row_padding, sticky="e")
-        output_frame = tk.Frame(main_frame)
-        output_frame.grid(row=1, column=1, columnspan=3, pady=row_padding, sticky="ew")
-        output_frame.grid_columnconfigure(1, weight=1)
+        output_row = ttk.Frame(main)
+        output_row.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        output_row.grid_columnconfigure(2, weight=1)
 
+        ttk.Label(output_row, text="输出方式:").grid(row=0, column=0, padx=(0, 6), sticky="e")
         self.output_mode_combo = ttk.Combobox(
-            output_frame,
+            output_row,
             textvariable=self.output_mode_var,
             values=list(OUTPUT_MODE_LABELS.values()),
             state="readonly",
-            width=22,
+            width=20,
         )
-        self.output_mode_combo.grid(row=0, column=0, sticky="w")
+        self.output_mode_combo.grid(row=0, column=1, sticky="w")
 
-        self.custom_output_entry = tk.Entry(output_frame, textvariable=self.custom_output_dir_var)
-        self.custom_output_entry.grid(row=0, column=1, padx=(8, 8), sticky="ew")
+        self.custom_output_entry = tk.Entry(output_row, textvariable=self.custom_output_dir_var)
+        self.custom_output_entry.grid(row=0, column=2, padx=(8, 6), sticky="ew")
 
         self.custom_output_button = tk.Button(
-            output_frame,
-            text="选择文件夹",
+            output_row,
+            text="选择…",
             command=self.select_custom_output_dir,
-            width=button_width,
+            width=8,
         )
-        self.custom_output_button.grid(row=0, column=2, sticky="e")
+        self.custom_output_button.grid(row=0, column=3, sticky="e")
 
-        tk.Label(main_frame, text="最大大小 (KB):", font=("Segoe UI", 9)).grid(
-            row=2, column=0, padx=(0, 8), pady=row_padding, sticky="e"
+        params = ttk.LabelFrame(main, text="压缩参数", padding=(8, 6))
+        params.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        params.grid_columnconfigure(1, weight=1)
+        params.grid_columnconfigure(3, weight=1)
+
+        ttk.Label(params, text="目标大小 (KB):").grid(row=0, column=0, padx=(0, 6), pady=2, sticky="e")
+        self.size_entry = tk.Entry(params, width=10)
+        self.size_entry.grid(row=0, column=1, pady=2, sticky="ew")
+
+        ttk.Label(params, text="Resize (宽x高/百分比%):").grid(
+            row=0, column=2, padx=(12, 6), pady=2, sticky="e"
         )
-        self.size_entry = tk.Entry(main_frame, width=field_width)
-        self.size_entry.grid(row=2, column=1, pady=row_padding, sticky="ew")
+        self.resize_entry = tk.Entry(params, width=10)
+        self.resize_entry.grid(row=0, column=3, pady=2, sticky="ew")
 
-        tk.Label(main_frame, text="Resize (宽x高/百分比%):", font=("Segoe UI", 9)).grid(
-            row=2, column=2, padx=(12, 8), pady=row_padding, sticky="e"
-        )
-        self.resize_entry = tk.Entry(main_frame, width=field_width)
-        self.resize_entry.grid(row=2, column=3, pady=row_padding, sticky="ew")
-
-        tk.Label(main_frame, text="输出格式:").grid(row=3, column=0, padx=(0, 8), pady=row_padding, sticky="e")
+        ttk.Label(params, text="输出格式:").grid(row=1, column=0, padx=(0, 6), pady=2, sticky="e")
         ttk.Combobox(
-            main_frame,
+            params,
             textvariable=self.format_var,
             values=list(SUPPORTED_FORMATS),
             state="readonly",
-            width=field_width,
-        ).grid(row=3, column=1, pady=row_padding, sticky="ew")
+            width=10,
+        ).grid(row=1, column=1, pady=2, sticky="ew")
 
-        tk.Label(main_frame, text="最大线程数:").grid(row=3, column=2, padx=(12, 8), pady=row_padding, sticky="e")
-        self.max_workers_entry = tk.Entry(main_frame, width=field_width)
-        self.max_workers_entry.grid(row=3, column=3, pady=row_padding, sticky="ew")
+        ttk.Label(params, text="最大线程数:").grid(row=1, column=2, padx=(12, 6), pady=2, sticky="e")
+        self.max_workers_entry = tk.Entry(params, width=10)
+        self.max_workers_entry.grid(row=1, column=3, pady=2, sticky="ew")
 
-        ttk.Checkbutton(
-            main_frame,
-            text="覆盖同名输出文件",
-            variable=self.overwrite_var,
-        ).grid(row=4, column=2, columnspan=2, padx=(12, 0), pady=row_padding, sticky="w")
+        ttk.Checkbutton(params, text="覆盖同名输出文件", variable=self.overwrite_var).grid(
+            row=2, column=2, columnspan=2, padx=(12, 0), pady=(4, 0), sticky="w"
+        )
 
-        compress_button_frame = tk.Frame(main_frame)
-        compress_button_frame.grid(row=5, column=0, columnspan=4, pady=(10, 8), sticky="ew")
-        compress_button_frame.grid_columnconfigure(0, weight=3)
-        compress_button_frame.grid_columnconfigure(1, weight=1)
+        action_row = ttk.Frame(main)
+        action_row.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        action_row.grid_columnconfigure(0, weight=3)
+        action_row.grid_columnconfigure(1, weight=1)
 
         self.compress_button = tk.Button(
-            compress_button_frame,
+            action_row,
             text="开始压缩",
             command=self.start_compression,
             bg="#4CAF50",
             fg="white",
-            height=2,
+            font=("Segoe UI", 10, "bold"),
         )
-        self.compress_button.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        self.compress_button.grid(row=0, column=0, sticky="ew", padx=(0, 4), ipady=4)
 
         self.cancel_button = tk.Button(
-            compress_button_frame,
+            action_row,
             text="取消",
             command=self.cancel_compression,
             bg="#f44336",
             fg="white",
-            height=2,
+            font=("Segoe UI", 10, "bold"),
             state="disabled",
         )
-        self.cancel_button.grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        self.cancel_button.grid(row=0, column=1, sticky="ew", padx=(4, 0), ipady=4)
 
-        self.progress = ttk.Progressbar(main_frame, orient="horizontal", mode="determinate")
-        self.progress.grid(row=6, column=0, columnspan=4, pady=(0, 8), sticky="ew")
+        self.progress = ttk.Progressbar(main, orient="horizontal", mode="determinate")
+        self.progress.grid(row=4, column=0, sticky="ew", pady=(8, 0))
 
-        tk.Label(main_frame, text="日志:").grid(row=7, column=0, padx=(0, 8), pady=(2, 4), sticky="nw")
-        self.log_text = tk.Text(main_frame, height=7, state="disabled", wrap="word")
-        self.log_text.grid(row=8, column=0, columnspan=4, sticky="nsew")
+        log_group = ttk.LabelFrame(main, text="日志", padding=(8, 6))
+        log_group.grid(row=5, column=0, sticky="nsew", pady=(8, 0))
+        log_group.grid_columnconfigure(0, weight=1)
+        log_group.grid_rowconfigure(0, weight=1)
+
+        self.log_text = tk.Text(log_group, height=5, width=52, state="disabled", wrap="word")
+        self.log_text.grid(row=0, column=0, sticky="nsew")
+        log_scroll = ttk.Scrollbar(log_group, orient="vertical", command=self.log_text.yview)
+        log_scroll.grid(row=0, column=1, sticky="ns")
+        self.log_text.config(yscrollcommand=log_scroll.set)
+
+    def fit_window(self) -> None:
+        """按内容自然尺寸收紧窗口，用户仍可自行放大。"""
+        self.root.update_idletasks()
+        width = max(600, self.root.winfo_reqwidth())
+        height = max(500, self.root.winfo_reqheight())
+        self.root.geometry(f"{width}x{height}")
+        self.root.minsize(width, height)
+
 
     def bind_events(self) -> None:
         self.output_mode_combo.bind("<<ComboboxSelected>>", lambda _event: self.update_custom_output_state())
@@ -245,9 +255,17 @@ class ImageCompressorApp:
         )
 
     def update_custom_output_state(self) -> None:
-        state = "normal" if self.current_output_mode() == OUTPUT_MODE_CUSTOM else "disabled"
+        is_custom = self.current_output_mode() == OUTPUT_MODE_CUSTOM
+        state = "normal" if is_custom else "disabled"
         self.custom_output_entry.config(state=state)
         self.custom_output_button.config(state=state)
+        # 非自定义模式下把两个控件收起，避免占宽和干扰视线。
+        if is_custom:
+            self.custom_output_entry.grid()
+            self.custom_output_button.grid()
+        else:
+            self.custom_output_entry.grid_remove()
+            self.custom_output_button.grid_remove()
 
     def get_resize_value(self) -> str | None:
         value = self.resize_entry.get().strip()
