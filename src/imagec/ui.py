@@ -193,7 +193,7 @@ class ImageCompressorApp:
             command=self.start_compression,
             bg="#4CAF50",
             fg="white",
-            font=("Segoe UI", 10, "bold"),
+            font=("Microsoft YaHei UI", 10, "bold"),
         )
         self.compress_button.grid(row=0, column=0, sticky="ew", padx=(0, 4), ipady=4)
 
@@ -203,7 +203,7 @@ class ImageCompressorApp:
             command=self.cancel_compression,
             bg="#f44336",
             fg="white",
-            font=("Segoe UI", 10, "bold"),
+            font=("Microsoft YaHei UI", 10, "bold"),
             state="disabled",
         )
         self.cancel_button.grid(row=0, column=1, sticky="ew", padx=(4, 0), ipady=4)
