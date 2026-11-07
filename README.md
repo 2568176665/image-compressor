@@ -43,18 +43,12 @@ uv run build.py
 uv run build.py --onefile
 ```
 
-默认生成 onedir 包（启动速度更快）；`--onefile` 生成单文件 EXE。两种模式都会内置编码器资源，打包前会校验资源清单，onedir 构建完成后还会再次校验输出目录。
+默认生成 onedir 包（启动最快）；`--onefile` 生成单文件 EXE。两种模式都会在打包前校验编码器资源清单，构建完成后再次校验产物：
 
-Nuitka（输出到 `nuitka-dist/`）：
+- **onedir**：编码器内置在 `dist/image_compressor/_internal/codecs/windows-x64/`。
+- **onefile**：编码器**不**打进 exe，而是复制到 `dist/codecs/windows-x64/`，必须与 `dist/image_compressor.exe` 一起分发。PyInstaller 的 onefile 每次启动都要把内置资源解压到临时目录，把约 20MB 编码器留在外面，等于每次冷启动少写 20MB、少扫几十个文件。运行时优先在 exe 同级目录找 `codecs/windows-x64/`，缺失会明确报错而不是静默降级。
 
-```bash
-uv run build-N.py
-uv run build-N.py --onefile
-```
-
-默认生成 `nuitka-dist/image_compressor.dist/`，`--onefile` 生成 `nuitka-dist/image_compressor.exe`，与 PyInstaller 的产物目录互不覆盖。Nuitka 首次构建会下载 MinGW 或 Dependency Walker 等依赖，需要联网和 MSVC Build Tools。
-
-Nuitka 不设置 `sys.frozen`，程序通过 `__compiled__` 判断冻结环境；onefile 下配置与日志写入 exe 所在目录，而不是临时解包目录。
+构建会排除本程序用不到的模块（`ssl`、`urllib`、`email`、`xml`、`sqlite3`、`asyncio` 等），顺带丢掉随 Pillow 一起被收集的 OpenSSL 运行库（`libcrypto-3-x64.dll` 7.8MB + `libssl-3-x64.dll` 1.5MB）。`hashlib` 在缺少 `_hashlib` 时会回退到内建 `_sha256`，编码器清单的 SHA-256 校验不受影响。
 
 ## 第三方许可
 

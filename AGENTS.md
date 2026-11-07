@@ -16,8 +16,7 @@ ImageC 是一个仅面向 **Windows x64** 的 Tkinter 桌面图片压缩工具�
 | `src/imagec/config.py` | 配置与日志路径解析、持久化 |
 | `src/imagec/subprocess_utils.py` | 子进程执行、取消、超时、输出收集 |
 | `src/third_party/codecs/windows-x64/` | 内置编码器、许可证与 `manifest.json` |
-| `build.py` | PyInstaller 打包与产物校验 |
-| `build-N.py` | Nuitka 打包，输出到 `nuitka-dist/` |
+| `build.py` | PyInstaller 打包与产物校验（唯一构建入口） |
 
 ## 编码链路约定
 
@@ -39,13 +38,11 @@ ImageC 是一个仅面向 **Windows x64** 的 Tkinter 桌面图片压缩工具�
 ## 开发命令
 
 ```bash
-uv sync                 # 安装依赖
-uv run pytest           # 运行测试（含编码器冒烟测试）
-uv run main.py          # 启动界面
-uv run build.py         # onedir 打包
-uv run build.py --onefile
-uv run build-N.py       # Nuitka standalone 打包
-uv run build-N.py --onefile
+uv sync                    # 安装依赖
+uv run pytest              # 运行测试（含编码器冒烟测试）
+uv run main.py             # 启动界面
+uv run build.py            # onedir 打包，编码器内置在 _internal/codecs/
+uv run build.py --onefile  # 单文件打包，编码器外置到 dist/codecs/
 ```
 
 ## 修改约束

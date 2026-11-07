@@ -4,6 +4,7 @@ import argparse
 import importlib.util
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -19,6 +20,27 @@ APP_NAME = "image_compressor"
 ICON_FILE = PROJECT_ROOT / "assets" / "app.ico"
 CODEC_RESOURCE_DIR = PROJECT_ROOT / "src" / "third_party" / "codecs" / "windows-x64"
 CODEC_PACKAGE_DIR = Path("codecs") / "windows-x64"
+
+# 本工具是纯本地桌面程序：不联网、不读写数据库、不解析 XML。
+# 砍掉这些模块可以把 PyInstaller 顺带收集的 libcrypto-3-x64.dll(7.8MB)
+# 与 libssl-3-x64.dll(1.5MB) 一起丢掉。hashlib 在缺少 _hashlib 时会自动
+# 回退到内建的 _sha256/_sha512，编码器清单校验照常工作。
+EXCLUDED_MODULES = (
+    "_ssl",
+    "ssl",
+    "_hashlib",
+    "http",
+    "urllib",
+    "email",
+    "xml",
+    "xmlrpc",
+    "sqlite3",
+    "asyncio",
+    "unittest",
+    "pydoc",
+    "turtle",
+    "tkinter.test",
+)
 
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
@@ -36,12 +58,14 @@ EXCLUDED_SCAN_DIRS = {
 DIRECTORIES_TO_REMOVE = {
     "build",
     "dist",
+    "nuitka-dist",
     "__pycache__",
     ".pytest_cache",
     ".mypy_cache",
     ".ruff_cache",
 }
 
+# 历史 Nuitka 产物，仅用于清理旧工作副本，当前只维护 PyInstaller 一条构建链。
 FILES_TO_REMOVE = {
     "compression.log",
     "nuitka-crash-report.xml",
@@ -161,7 +185,12 @@ def build(root: Path, onedir: bool) -> None:
         "--version-file",
         str(version_file),
     ]
-    cmd.extend(build_codec_arguments(codec_resources))
+    # onefile 模式下编码器不打进 exe：PyInstaller 每次启动都会把内置资源
+    # 解压到临时目录，20MB 编码器会让每次冷启动都多付一次磁盘写入。
+    # 改为构建后放到 exe 同级目录，运行时由 get_codec_resource_dir 找到。
+    if onedir:
+        cmd.extend(build_codec_arguments(codec_resources))
+    cmd.extend(build_exclude_arguments())
     cmd.extend(build_dnd_arguments())
 
     if onedir:
@@ -169,10 +198,9 @@ def build(root: Path, onedir: bool) -> None:
     else:
         cmd.append("--onefile")
 
-    if ICON_FILE.exists():
-        cmd.extend(["--icon", str(ICON_FILE)])
-    else:
-        print(f"[build] Icon not found, skip: {ICON_FILE}")
+    if not ICON_FILE.is_file():
+        raise FileNotFoundError(f"Icon file missing, refusing to build without an icon: {ICON_FILE}")
+    cmd.extend(["--icon", str(ICON_FILE)])
 
     cmd.append(str(ENTRY_SCRIPT))
 
@@ -195,6 +223,8 @@ def build(root: Path, onedir: bool) -> None:
         output_path = root / "dist" / APP_NAME
     else:
         output_path = root / "dist" / f"{APP_NAME}.exe"
+        codec_dir = stage_portable_codecs(output_path.parent)
+        print(f"[build] 编码器已外置: {codec_dir}")
 
     validate_build_output(output_path, onedir)
     print(f"[build] Build success: {output_path}")
@@ -268,6 +298,52 @@ def parse_version_parts(version: str) -> tuple[int, int, int]:
     return parts[0], parts[1], parts[2]
 
 
+def read_icon_image_blobs(icon_path: Path = ICON_FILE) -> list[bytes]:
+    """解析 ICO 目录，返回每个尺寸的图像数据块，用于校验图标是否真的写进 exe。"""
+    data = icon_path.read_bytes()
+    if len(data) < 6:
+        raise RuntimeError(f"图标文件损坏: {icon_path}")
+    reserved, icon_type, count = struct.unpack_from("<HHH", data, 0)
+    if reserved != 0 or icon_type != 1 or count == 0:
+        raise RuntimeError(f"图标文件格式错误: {icon_path}")
+    blobs: list[bytes] = []
+    for index in range(count):
+        entry_offset = 6 + index * 16
+        *_, size, offset = struct.unpack_from("<BBBBHHII", data, entry_offset)
+        blob = data[offset : offset + size]
+        if not blob or len(blob) != size:
+            raise RuntimeError(f"图标数据块损坏: {icon_path} #{index}")
+        blobs.append(blob)
+    return blobs
+
+
+def validate_embedded_icon(executable: Path, icon_path: Path = ICON_FILE) -> None:
+    """确认 exe 内真正写入了 ICO 的每个图像块，避免 --icon 静默失效。"""
+    blobs = read_icon_image_blobs(icon_path)
+    payload = executable.read_bytes()
+    missing = [index for index, blob in enumerate(blobs) if blob not in payload]
+    if missing:
+        raise RuntimeError(
+            f"可执行文件未内嵌图标资源: {executable}（缺失 {len(missing)}/{len(blobs)} 个尺寸）"
+        )
+
+
+def stage_portable_codecs(dist_dir: Path) -> Path:
+    """把编码器整目录复制到 onefile exe 同级，替代打进 exe 内置资源。"""
+    target = dist_dir / CODEC_PACKAGE_DIR
+    if target.exists():
+        remove_path(target)
+    shutil.copytree(CODEC_RESOURCE_DIR, target)
+    return target
+
+
+def build_exclude_arguments() -> list[str]:
+    arguments: list[str] = []
+    for module in EXCLUDED_MODULES:
+        arguments.extend(["--exclude-module", module])
+    return arguments
+
+
 def validate_build_output(output_path: Path, onedir: bool) -> None:
     if not output_path.exists():
         raise FileNotFoundError(f"Build output missing: {output_path}")
@@ -275,6 +351,7 @@ def validate_build_output(output_path: Path, onedir: bool) -> None:
         executable = output_path / f"{APP_NAME}.exe"
         if not executable.exists():
             raise FileNotFoundError(f"Onedir executable missing: {executable}")
+        validate_embedded_icon(executable)
         resource_candidates = [
             output_path / CODEC_PACKAGE_DIR,
             output_path / "_internal" / CODEC_PACKAGE_DIR,
@@ -289,11 +366,21 @@ def validate_build_output(output_path: Path, onedir: bool) -> None:
     elif output_path.suffix.lower() != ".exe":
         raise RuntimeError(f"Unexpected build artifact: {output_path}")
     else:
+        validate_embedded_icon(output_path)
+        codec_dir = output_path.parent / CODEC_PACKAGE_DIR
+        if not (codec_dir / "manifest.json").is_file():
+            raise FileNotFoundError(f"Onefile 外置编码器目录缺失: {codec_dir}（需与 exe 一同分发）")
+        resources = validate_codec_resources(codec_dir)
         payload = output_path.read_bytes()
-        required_names = tuple(path.name for path in validate_codec_resources(CODEC_RESOURCE_DIR))
-        missing = [name for name in required_names if name.encode("utf-8") not in payload]
-        if missing:
-            raise RuntimeError(f"Onefile 编码器资源未内置: {', '.join(missing)}")
+        # 只查子进程入口的 exe 名字：编码器目录里的 zlib1.dll 之类和 Pillow、
+        # tkinter 自带的同名 DLL 无法区分，命名重合不代表编码器被打进了包。
+        embedded = [
+            path.name
+            for path in resources
+            if path.suffix.lower() == ".exe" and path.name.encode("utf-8") in payload
+        ]
+        if embedded:
+            raise RuntimeError(f"Onefile 仍内置了编码器: {', '.join(embedded)}")
 
 
 def build_dnd_arguments() -> list[str]:
