@@ -365,6 +365,31 @@ def test_overwrite_mode_refuses_to_hit_another_input_file(tmp_path: Path) -> Non
     assert second.read_bytes() == original_second
 
 
+def test_output_directory_creation_failure_reports_details(tmp_path: Path, monkeypatch, caplog) -> None:
+    source = tmp_path / "source.png"
+    _write_image(source)
+    output_dir = tmp_path / "out"
+    original_mkdir = Path.mkdir
+
+    def fail_output_mkdir(path: Path, *args, **kwargs) -> None:
+        if path == output_dir:
+            raise PermissionError(13, "Permission denied", str(path))
+        original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", fail_output_mkdir)
+    result = _service([]).compress_file(
+        CompressionRequest(str(source), str(output_dir), 20_000, "jpg", None)
+    )
+
+    assert result.status == "failed"
+    assert "无法创建输出目录" in result.message
+    assert "Permission denied" in result.message
+    assert str(output_dir) in result.message
+    assert str(output_dir) in caplog.text
+    assert "PermissionError" in caplog.text
+    assert not output_dir.exists()
+
+
 def test_batch_resolves_output_directory_per_file(tmp_path: Path) -> None:
     first_dir = tmp_path / "one"
     second_dir = tmp_path / "two"

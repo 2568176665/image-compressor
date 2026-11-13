@@ -312,10 +312,11 @@ class CompressionService:
             plans = self._build_resize_chain(request.resize_value, input_size, request.target_size)
             try:
                 output_file.parent.mkdir(parents=True, exist_ok=True)
-            except OSError:
+            except OSError as error:
+                logging.exception("无法创建输出目录: %s", output_file.parent)
                 return CompressionResult(
                     status="failed",
-                    message=f"失败: {input_path.stem} (无法创建输出目录)",
+                    message=f"失败: {input_path.stem} (无法创建输出目录 {output_file.parent}: {error})",
                 )
             with tempfile.TemporaryDirectory(prefix="imagec-") as temp_dir:
                 temp_root = Path(temp_dir)
