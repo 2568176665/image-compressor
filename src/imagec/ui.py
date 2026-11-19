@@ -107,12 +107,12 @@ class ImageCompressorApp:
         hint_text = "支持拖拽图片或文件夹到列表" if DND_SUPPORTED else "点击“添加”选择图片或文件夹"
         ttk.Label(input_actions, text=hint_text, foreground="#777777").grid(row=0, column=0, sticky="w")
 
-        input_buttons = ttk.Frame(input_actions)
-        input_buttons.grid(row=0, column=1, sticky="e")
+        input_buttons = ttk.Frame(input_group)
+        input_buttons.grid(row=0, column=2, sticky="n", padx=(8, 0))
 
         # 用普通 tk.Button + 弹出菜单，保证与“移除选中”“清空”外观完全一致。
         self.add_button = tk.Button(input_buttons, text="添加 ▾", command=self.show_add_menu, width=9)
-        self.add_button.grid(row=0, column=0, padx=(0, 4))
+        self.add_button.grid(row=0, column=0, sticky="ew", pady=(0, 4))
 
         self.add_menu = tk.Menu(self.add_button, tearoff=False)
         self.add_menu.add_command(label="选择图片（可多选）", command=self.select_images)
@@ -121,10 +121,10 @@ class ImageCompressorApp:
         self.remove_button = tk.Button(
             input_buttons, text="移除选中", command=self.remove_selected, width=9
         )
-        self.remove_button.grid(row=0, column=1, padx=(0, 4))
+        self.remove_button.grid(row=1, column=0, sticky="ew", pady=(0, 4))
 
         self.clear_button = tk.Button(input_buttons, text="清空", command=self.clear_inputs, width=6)
-        self.clear_button.grid(row=0, column=2)
+        self.clear_button.grid(row=2, column=0, sticky="ew")
 
         output_row = ttk.Frame(main)
         output_row.grid(row=1, column=0, sticky="ew", pady=(8, 0))

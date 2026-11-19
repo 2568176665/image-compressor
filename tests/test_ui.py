@@ -112,6 +112,13 @@ def test_add_button_matches_sibling_buttons_and_opens_menu(monkeypatch, tmp_path
     root, app = _make_app(monkeypatch, tmp_path)
     try:
         assert isinstance(app.add_button, tk.Button)
+        buttons = (app.add_button, app.remove_button, app.clear_button)
+        assert all(button.master == app.add_button.master for button in buttons)
+        assert [button.grid_info()["row"] for button in buttons] == [0, 1, 2]
+        assert all(button.grid_info()["column"] == 0 for button in buttons)
+        assert app.add_button.master.master == app.input_listbox.master
+        assert app.add_button.master.grid_info()["column"] == 2
+        assert app.add_button.master.grid_info()["row"] == app.input_listbox.grid_info()["row"]
         for option in ("relief", "bd", "font", "width", "padx", "highlightthickness"):
             assert app.add_button.cget(option) == app.remove_button.cget(option), option
 
