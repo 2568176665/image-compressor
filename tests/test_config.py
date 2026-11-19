@@ -134,12 +134,14 @@ def test_config_round_trip_omits_input_list_and_preserves_output_mode(tmp_path: 
             "input_paths": images,
             "output_mode": OUTPUT_MODE_SIBLING,
             "custom_output_dir": str(tmp_path / "out"),
+            "allow_downscale": True,
         }
     )
 
     loaded = store.load()
     assert "input_paths" not in loaded
     assert "input_paths" not in json.loads(paths.config_path.read_text(encoding="utf-8"))
+    assert loaded["allow_downscale"] is True
     assert loaded["output_mode"] == OUTPUT_MODE_SIBLING
     assert loaded["custom_output_dir"] == str(tmp_path / "out")
     assert set(DEFAULT_CONFIG).issubset(loaded)

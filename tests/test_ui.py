@@ -66,6 +66,8 @@ def test_ui_collects_multiple_images_without_persisting_them(monkeypatch, tmp_pa
         assert app.input_paths == [str(first), str(second)]
         assert app.input_listbox.size() == 2
 
+        assert not app.allow_downscale_var.get()
+        app.allow_downscale_var.set(True)
         app.output_mode_var.set(OUTPUT_MODE_LABELS[OUTPUT_MODE_SIBLING])
         app.save_config()
     finally:
@@ -74,6 +76,7 @@ def test_ui_collects_multiple_images_without_persisting_them(monkeypatch, tmp_pa
     saved = json.loads(_app_paths(tmp_path).config_path.read_text(encoding="utf-8"))
     assert "input_paths" not in saved
     assert saved["output_mode"] == OUTPUT_MODE_SIBLING
+    assert saved["allow_downscale"] is True
 
 
 def test_add_button_matches_sibling_buttons_and_opens_menu(monkeypatch, tmp_path: Path) -> None:

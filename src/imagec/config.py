@@ -39,6 +39,7 @@ DEFAULT_CONFIG: dict[str, object] = {
     "format": "jpg",
     "max_workers": "4",
     "overwrite": False,
+    "allow_downscale": False,
 }
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".avif"}
 

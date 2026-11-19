@@ -62,6 +62,7 @@ class ImageCompressorApp:
         self.input_paths: list[str] = []
 
         self.overwrite_var = tk.BooleanVar(value=False)
+        self.allow_downscale_var = tk.BooleanVar(value=False)
         default_mode = normalize_output_mode(DEFAULT_CONFIG["output_mode"])
         self.output_mode_var = tk.StringVar(value=OUTPUT_MODE_LABELS[default_mode])
         self.custom_output_dir_var = tk.StringVar()
@@ -178,6 +179,9 @@ class ImageCompressorApp:
         self.max_workers_entry = tk.Entry(params, width=10)
         self.max_workers_entry.grid(row=1, column=3, pady=2, sticky="ew")
 
+        ttk.Checkbutton(params, text="无法达标时允许缩小尺寸", variable=self.allow_downscale_var).grid(
+            row=2, column=0, columnspan=2, pady=(4, 0), sticky="w"
+        )
         ttk.Checkbutton(params, text="覆盖同名输出文件", variable=self.overwrite_var).grid(
             row=2, column=2, columnspan=2, padx=(12, 0), pady=(4, 0), sticky="w"
         )
@@ -344,6 +348,7 @@ class ImageCompressorApp:
         self.output_mode_var.set(OUTPUT_MODE_LABELS[configured_mode])
         self.custom_output_dir_var.set(str(config.get("custom_output_dir", "") or ""))
         self.overwrite_var.set(bool(config.get("overwrite", DEFAULT_CONFIG["overwrite"])))
+        self.allow_downscale_var.set(bool(config.get("allow_downscale", DEFAULT_CONFIG["allow_downscale"])))
         configured_format = normalize_format(str(config.get("format", DEFAULT_CONFIG["format"])))
         self.format_var.set(configured_format if configured_format in SUPPORTED_FORMATS else str(DEFAULT_CONFIG["format"]))
 
@@ -367,6 +372,7 @@ class ImageCompressorApp:
                 "format": self.format_var.get(),
                 "max_workers": self.max_workers_entry.get(),
                 "overwrite": self.overwrite_var.get(),
+                "allow_downscale": self.allow_downscale_var.get(),
             }
         )
 
@@ -443,6 +449,7 @@ class ImageCompressorApp:
                 self.get_resize_value(),
                 max_workers,
                 self.overwrite_var.get(),
+                self.allow_downscale_var.get(),
             ),
             daemon=True,
         ).start()
@@ -457,6 +464,7 @@ class ImageCompressorApp:
         resize_value: str | None,
         max_workers: int,
         overwrite: bool,
+        allow_downscale: bool,
     ) -> None:
         status = "failed"
         try:
@@ -467,6 +475,7 @@ class ImageCompressorApp:
                 resize_value=resize_value,
                 max_workers=max_workers,
                 overwrite=overwrite,
+                allow_downscale=allow_downscale,
                 name_suffix=output_name_suffix(output_mode),
                 output_dir_resolver=lambda image_file: resolve_output_dir(
                     output_mode, image_file, custom_output_dir

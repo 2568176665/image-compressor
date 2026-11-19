@@ -43,6 +43,7 @@ class CompressionRequest:
     resize_value: str | None
     overwrite: bool = False
     name_suffix: str = ""
+    allow_downscale: bool = False
 
 
 @dataclass(slots=True)
@@ -52,6 +53,7 @@ class CompressionResult:
     output_file: str | None = None
     output_size: int | None = None
     timed_out: bool = False
+    oversized: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,6 +182,7 @@ class CompressionService:
         max_workers: int,
         overwrite: bool = False,
         name_suffix: str = "",
+        allow_downscale: bool = False,
         output_dir_resolver: Callable[[str], str] | None = None,
         progress_callback: Callable[[int, int, CompressionResult], None] | None = None,
     ) -> str:
@@ -210,6 +213,7 @@ class CompressionService:
                         resize_value=resize_value,
                         overwrite=overwrite,
                         name_suffix=name_suffix,
+                        allow_downscale=allow_downscale,
                     ),
                 )
                 for image_file in image_files
@@ -309,7 +313,9 @@ class CompressionService:
             return CompressionResult(status="failed", message=f"失败: {input_path.stem} (无法读取图片)")
 
         try:
-            plans = self._build_resize_chain(request.resize_value, input_size, request.target_size)
+            plans = self._build_resize_chain(
+                request.resize_value, input_size, request.target_size, request.allow_downscale
+            )
             try:
                 output_file.parent.mkdir(parents=True, exist_ok=True)
             except OSError as error:
@@ -331,7 +337,7 @@ class CompressionService:
                         self._save_transform(base_image, plan, output_format, source_png)
                     except (OSError, ValueError, SyntaxError) as error:
                         logging.error("生成临时 PNG 失败: %s", error)
-                        continue
+                        return CompressionResult(status="failed", message=f"失败: {input_path.stem} (生成临时图片失败)")
 
                     try:
                         result = self._encode(
@@ -343,12 +349,14 @@ class CompressionService:
                     except (OSError, ValueError, KeyError) as error:
                         logging.error("调用编码器失败: %s", error)
                         candidate_output.unlink(missing_ok=True)
-                        continue
+                        return CompressionResult(status="failed", message=f"失败: {input_path.stem} (调用编码器失败)")
                     if result.status == "cancelled":
                         return result
                     if result.timed_out:
                         return result
                     if result.status != "completed":
+                        if not result.oversized:
+                            return result
                         continue
 
                     try:
@@ -513,7 +521,17 @@ class CompressionService:
             output_format,
             target_size,
         )
-        return self._run_and_validate(command, output_file, target_size)
+        result = self._run_and_validate(command, output_file, target_size)
+        if result.status == "completed" or result.status == "cancelled" or result.timed_out:
+            return result
+
+        if output_format == "jpg":
+            minimum_command = [encoder, str(source_png), str(output_file), "--quality=1", "--quiet"]
+        elif output_format == "webp":
+            minimum_command = [encoder, "-quiet", "-m", "6", "-q", "0", "-alpha_q", "0", str(source_png), "-o", str(output_file)]
+        else:
+            minimum_command = [encoder, "--speed", "6", "--jobs", "1", "--qcolor", "0", "--qalpha", "0", str(source_png), str(output_file)]
+        return self._run_and_validate(minimum_command, output_file, target_size)
 
     def _encode_png(
         self,
@@ -526,7 +544,8 @@ class CompressionService:
         if not oxipng_path:
             return CompressionResult(status="failed", message="失败: 缺少 oxipng 编码器")
 
-        quality_ranges = ((60, 100), (60, 90), (60, 80), (60, 70), (60, 60))
+        quality_ranges = ((0, 100), (0, 80), (0, 60), (0, 40), (0, 20), (0, 0))
+        last_result = CompressionResult(status="failed", message="失败: PNG 编码失败")
         for minimum, maximum in quality_ranges:
             output_file.unlink(missing_ok=True)
             pngquant_command = [
@@ -540,11 +559,16 @@ class CompressionService:
                 str(output_file),
                 str(source_png),
             ]
+            if maximum == 0:
+                pngquant_command.insert(1, "2")
             command_result = self._run_command(pngquant_command)
             if command_result.cancelled:
                 output_file.unlink(missing_ok=True)
                 return CompressionResult(status="cancelled", message="压缩已取消")
+            if command_result.timed_out:
+                return CompressionResult(status="failed", message="失败: 编码器执行超时", timed_out=True)
             if command_result.returncode != 0 or not output_file.exists():
+                last_result = CompressionResult(status="failed", message="失败: PNG 编码失败")
                 continue
 
             # pngquant 已经去除了元数据并满足目标大小时，无需再启动 oxipng。
@@ -570,11 +594,12 @@ class CompressionService:
                 str(output_file),
             ]
             result = self._run_and_validate(oxipng_command, output_file, target_size)
-            if result.status in {"completed", "cancelled"}:
+            if result.status in {"completed", "cancelled"} or result.timed_out:
                 return result
+            last_result = result
 
         output_file.unlink(missing_ok=True)
-        return CompressionResult(status="failed", message=f"失败: {output_file.stem} (无法达到目标)")
+        return last_result
 
     def _build_encoder_command(
         self,
@@ -663,7 +688,7 @@ class CompressionService:
             )
 
         output_file.unlink(missing_ok=True)
-        return CompressionResult(status="failed", message=f"失败: {output_file.stem} (无法达到目标)")
+        return CompressionResult(status="failed", message=f"失败: {output_file.stem} (无法达到目标)", oversized=True)
 
     def _run_command(self, command: list[str]) -> CommandResult:
         return self.command_runner(
@@ -677,6 +702,7 @@ class CompressionService:
         resize_value: str | None,
         input_size: int,
         target_size: int,
+        allow_downscale: bool = False,
     ) -> list[TransformPlan]:
         requested_resize = (
             resize_value
@@ -684,7 +710,7 @@ class CompressionService:
             else None
         )
         plans = [TransformPlan(requested_resize)]
-        if requested_resize is None:
+        if not allow_downscale:
             return plans
         base_scale = max(0.15, min(0.95, math.sqrt(target_size / max(input_size, 1))))
         for factor in (1.0, 0.92, 0.84, 0.76, 0.68):

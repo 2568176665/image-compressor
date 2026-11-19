@@ -22,7 +22,7 @@ ImageC 是一个仅面向 **Windows x64** 的 Tkinter 桌面图片压缩工具�
 
 - 所有输入先经 Pillow 转为临时 PNG（`_save_transform`），再交给外部编码器。
 - UI 的输入是图片路径列表：`expand_input_paths` 负责把文件夹/图片路径展开成去重后的文件列表；输出目录由 `resolve_output_dir` 按 `output_mode`（`sibling` / `sibling_compressed` / `custom`）逐张解析。
-- 目标大小是硬上限；未设置 Resize 时保持方向校正后的尺寸，无法达标则失败。设置 Resize 后可通过缩小重试，任何超限输出都视为失败。
+- 目标大小是硬上限；先在用户指定 Resize 后的尺寸（未指定时为方向校正后的原尺寸）尝试最低质量。仅开启允许缩小尺寸时，最低质量仍超限才缩小重试；任何超限输出都视为失败。
 - 输出命名规则：默认**从不覆盖**已存在的文件，冲突时追加 `-1`、`-2`；只有用户显式开启 `overwrite` 才复用原文件名。自动输出方式（同目录及其 `compressed` 子目录）额外给 stem 追加 `_ic`。
 - 当输出路径与源文件相同时，即使开启 `overwrite` 也必须拒绝，避免破坏原图。
 - `run_batch` 会把整批输入登记为受保护路径：任何输出都不得落到其中任一文件上，即使开启 `overwrite`。

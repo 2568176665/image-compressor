@@ -216,7 +216,7 @@ def test_png_skips_oxipng_when_quantized_output_meets_target(tmp_path: Path) -> 
 
     assert result.status == "completed"
     assert calls[0][0] == "png.exe"
-    assert "--quality=60-100" in calls[0]
+    assert "--quality=0-100" in calls[0]
     assert calls[0][calls[0].index("--speed") + 1] == "4"
     assert not any(command[0] == "oxipng.exe" for command in calls)
 
@@ -255,6 +255,33 @@ def test_png_uses_fast_oxipng_only_when_quantized_output_is_oversized(tmp_path: 
     assert "-Z" not in oxipng
 
 
+def test_png_tries_two_colors_before_downscale(tmp_path: Path) -> None:
+    source = tmp_path / "source.png"
+    _write_image(source)
+    calls: list[tuple[list[str], tuple[int, int]]] = []
+
+    def runner(command: list[str], **_kwargs) -> CommandResult:
+        if command[0] == "png.exe":
+            with Image.open(command[-1]) as prepared:
+                size = prepared.size
+            calls.append((command, size))
+            output = Path(command[command.index("--output") + 1])
+            Image.effect_noise((128, 128), 100).save(output, format="PNG")
+        return CommandResult(returncode=0, stdout="", stderr="", cancelled=False)
+
+    service = CompressionService(
+        encoder_paths={"png": "png.exe", "oxipng": "oxipng.exe"}, command_runner=runner
+    )
+    result = service.compress_file(CompressionRequest(
+        str(source), str(tmp_path / "out"), 100, "png", None, allow_downscale=True
+    ))
+
+    assert result.status == "failed"
+    first_downscale = next(i for i, (_, size) in enumerate(calls) if size != (64, 48))
+    assert "2" in calls[first_downscale - 1][0]
+    assert "--quality=0-0" in calls[first_downscale - 1][0]
+
+
 def test_resize_retry_keeps_final_output_within_target(tmp_path: Path) -> None:
     source = tmp_path / "source.png"
     _write_image(source)
@@ -262,13 +289,83 @@ def test_resize_retry_keeps_final_output_within_target(tmp_path: Path) -> None:
     service = _service(calls, oversize_once=True)
 
     result = service.compress_file(
-        CompressionRequest(str(source), str(tmp_path / "out"), 500, "webp", "100%")
+        CompressionRequest(str(source), str(tmp_path / "out"), 500, "webp", "100%", allow_downscale=True)
     )
 
     assert result.status == "completed"
     assert len(calls) >= 2
     assert result.output_file is not None
     assert Path(result.output_file).stat().st_size <= 500
+
+
+@pytest.mark.parametrize(
+    ("output_format", "quality_option", "quality_value"),
+    [("jpg", "--quality=1", None), ("webp", "-q", "0"), ("avif", "--qcolor", "0")],
+)
+def test_minimum_quality_is_attempted_before_downscale(
+    tmp_path: Path, output_format: str, quality_option: str, quality_value: str | None
+) -> None:
+    service = CompressionService(encoder_paths={output_format: "encoder"})
+    calls: list[list[str]] = []
+
+    def run_and_validate(command, output_file, target_size):
+        calls.append(command)
+        return CompressionResult(status="failed", message="too large", oversized=True)
+
+    service._run_and_validate = run_and_validate
+    result = service._encode(tmp_path / "source.png", tmp_path / f"out.{output_format}", output_format, 100)
+
+    assert result.oversized
+    assert len(calls) == 2
+    assert quality_option in calls[1]
+    if quality_value is not None:
+        assert calls[1][calls[1].index(quality_option) + 1] == quality_value
+
+
+def test_downscale_only_after_minimum_quality_fails(tmp_path: Path) -> None:
+    source = tmp_path / "source.png"
+    _write_image(source)
+    attempts: list[tuple[tuple[int, int], bool]] = []
+
+    def runner(command: list[str], **_kwargs) -> CommandResult:
+        with Image.open(command[-3]) as prepared:
+            size = prepared.size
+        attempts.append((size, "-q" in command))
+        if size == (64, 48):
+            image = Image.effect_noise((128, 128), 100)
+        else:
+            image = Image.new("RGB", size)
+        image.save(command[-1], format="WEBP", quality=95)
+        image.close()
+        return CommandResult(returncode=0, stdout="", stderr="", cancelled=False)
+
+    service = CompressionService(encoder_paths={"webp": "webp.exe"}, command_runner=runner)
+    result = service.compress_file(CompressionRequest(
+        str(source), str(tmp_path / "out"), 500, "webp", None, allow_downscale=True
+    ))
+
+    assert result.status == "completed"
+    assert attempts[0:2] == [((64, 48), False), ((64, 48), True)]
+    assert attempts[2][0][0] < 64
+
+
+def test_encoder_error_does_not_trigger_downscale(tmp_path: Path) -> None:
+    source = tmp_path / "source.png"
+    _write_image(source)
+    sizes: list[tuple[int, int]] = []
+
+    def runner(command: list[str], **_kwargs) -> CommandResult:
+        with Image.open(command[-3]) as prepared:
+            sizes.append(prepared.size)
+        return CommandResult(returncode=1, stdout="", stderr="error", cancelled=False)
+
+    service = CompressionService(encoder_paths={"webp": "webp.exe"}, command_runner=runner)
+    result = service.compress_file(CompressionRequest(
+        str(source), str(tmp_path / "out"), 500, "webp", None, allow_downscale=True
+    ))
+
+    assert result.status == "failed"
+    assert sizes == [(64, 48), (64, 48)]
 
 
 def test_no_resize_keeps_output_dimensions(tmp_path: Path) -> None:
@@ -310,7 +407,7 @@ def test_no_resize_does_not_shrink_to_reach_target(tmp_path: Path, resize_value:
     )
 
     assert result.status == "failed"
-    assert sizes == [(64, 48)]
+    assert sizes == [(64, 48), (64, 48)]
     assert not list((tmp_path / "out").glob("*.webp"))
 
 
