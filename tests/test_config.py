@@ -124,7 +124,7 @@ def test_config_store_reads_legacy_program_config_and_saves_to_fallback(
     assert store.legacy_config_path == legacy_config
 
 
-def test_config_round_trip_preserves_input_list_and_output_mode(tmp_path: Path) -> None:
+def test_config_round_trip_omits_input_list_and_preserves_output_mode(tmp_path: Path) -> None:
     paths = _app_paths(tmp_path)
     store = ConfigStore(paths)
     images = [str(tmp_path / "a.jpg"), str(tmp_path / "b.png")]
@@ -138,7 +138,8 @@ def test_config_round_trip_preserves_input_list_and_output_mode(tmp_path: Path) 
     )
 
     loaded = store.load()
-    assert loaded["input_paths"] == images
+    assert "input_paths" not in loaded
+    assert "input_paths" not in json.loads(paths.config_path.read_text(encoding="utf-8"))
     assert loaded["output_mode"] == OUTPUT_MODE_SIBLING
     assert loaded["custom_output_dir"] == str(tmp_path / "out")
     assert set(DEFAULT_CONFIG).issubset(loaded)
@@ -154,22 +155,21 @@ def test_config_store_ignores_legacy_single_input_path(tmp_path: Path) -> None:
 
     loaded = ConfigStore(paths).load()
 
-    assert loaded["input_paths"] == []
+    assert "input_paths" not in loaded
     assert "input_path" not in loaded
 
 
-def test_config_store_coerces_tampered_input_paths(tmp_path: Path) -> None:
+def test_config_store_ignores_legacy_input_list(tmp_path: Path) -> None:
     paths = _app_paths(tmp_path)
     paths.config_path.parent.mkdir(parents=True)
     paths.config_path.write_text(
-        json.dumps({"input_paths": "C:\\only\\one.jpg"}, ensure_ascii=False),
-        encoding="utf-8",
+        json.dumps({"input_paths": ["old.jpg"], "format": "png"}), encoding="utf-8"
     )
 
-    assert ConfigStore(paths).load()["input_paths"] == ["C:\\only\\one.jpg"]
+    loaded = ConfigStore(paths).load()
 
-    paths.config_path.write_text(json.dumps({"input_paths": {"a": 1}}), encoding="utf-8")
-    assert ConfigStore(paths).load()["input_paths"] == []
+    assert "input_paths" not in loaded
+    assert loaded["format"] == "png"
 
 
 def test_config_store_uses_defaults_when_file_missing(tmp_path: Path) -> None:

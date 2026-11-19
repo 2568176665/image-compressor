@@ -53,7 +53,7 @@ def _make_app(monkeypatch, tmp_path: Path, paths: AppPaths | None = None):
     return root, app
 
 
-def test_ui_collects_multiple_images_and_persists_them(monkeypatch, tmp_path: Path) -> None:
+def test_ui_collects_multiple_images_without_persisting_them(monkeypatch, tmp_path: Path) -> None:
     root, app = _make_app(monkeypatch, tmp_path)
     try:
         first = tmp_path / "a.jpg"
@@ -72,7 +72,7 @@ def test_ui_collects_multiple_images_and_persists_them(monkeypatch, tmp_path: Pa
         root.destroy()
 
     saved = json.loads(_app_paths(tmp_path).config_path.read_text(encoding="utf-8"))
-    assert saved["input_paths"] == [str(first), str(second)]
+    assert "input_paths" not in saved
     assert saved["output_mode"] == OUTPUT_MODE_SIBLING
 
 
@@ -117,7 +117,7 @@ def test_ui_custom_output_entry_toggles_with_output_mode(monkeypatch, tmp_path: 
         root.destroy()
 
 
-def test_ui_restores_only_existing_paths_from_config(monkeypatch, tmp_path: Path) -> None:
+def test_ui_starts_empty_despite_saved_paths(monkeypatch, tmp_path: Path) -> None:
     paths = _app_paths(tmp_path)
     paths.config_path.parent.mkdir(parents=True)
     existing = tmp_path / "kept.jpg"
@@ -137,8 +137,8 @@ def test_ui_restores_only_existing_paths_from_config(monkeypatch, tmp_path: Path
 
     root, app = _make_app(monkeypatch, tmp_path, paths)
     try:
-        assert app.input_paths == [str(existing)]
-        assert app.input_listbox.size() == 1
+        assert app.input_paths == []
+        assert app.input_listbox.size() == 0
         assert app.current_output_mode() == OUTPUT_MODE_SIBLING
         assert app.size_entry.get() == "100"
         assert app.format_var.get() == str(DEFAULT_CONFIG["format"])

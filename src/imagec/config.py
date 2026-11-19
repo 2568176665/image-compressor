@@ -32,7 +32,6 @@ OUTPUT_SUBDIR_NAME = "compressed"
 AUTO_OUTPUT_NAME_SUFFIX = "_ic"
 
 DEFAULT_CONFIG: dict[str, object] = {
-    "input_paths": [],
     "output_mode": OUTPUT_MODE_COMPRESSED,
     "custom_output_dir": "",
     "target_size_kb": "100",
@@ -118,7 +117,6 @@ class ConfigStore:
             if isinstance(loaded, dict):
                 config.update({key: value for key, value in loaded.items() if key in DEFAULT_CONFIG})
             break
-        config["input_paths"] = coerce_input_paths(config.get("input_paths"))
         return config
 
     def save(self, config: dict) -> Path:
@@ -126,7 +124,7 @@ class ConfigStore:
         target.parent.mkdir(parents=True, exist_ok=True)
         payload = copy.deepcopy(DEFAULT_CONFIG)
         payload.update(config)
-        payload["input_paths"] = coerce_input_paths(payload.get("input_paths"))
+        payload.pop("input_paths", None)
         with target.open("w", encoding="utf-8") as file_obj:
             json.dump(payload, file_obj, ensure_ascii=False, indent=2)
         return target
@@ -153,20 +151,6 @@ def configure_logging(paths: AppPaths) -> None:
         ],
         force=True,
     )
-
-
-def coerce_input_paths(value: object) -> list[str]:
-    """把配置里的输入列表清洗成非空字符串列表，兼容旧版字符串写法。"""
-    if isinstance(value, str):
-        return [value] if value.strip() else []
-    if not isinstance(value, (list, tuple)):
-        return []
-    paths: list[str] = []
-    for item in value:
-        text = str(item).strip()
-        if text:
-            paths.append(text)
-    return paths
 
 
 def normalize_output_mode(value: object) -> str:

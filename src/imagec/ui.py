@@ -340,7 +340,6 @@ class ImageCompressorApp:
 
     def load_config(self) -> None:
         config = self.config_store.load()
-        self.apply_input_paths(config.get("input_paths", DEFAULT_CONFIG["input_paths"]))
         configured_mode = normalize_output_mode(config.get("output_mode", DEFAULT_CONFIG["output_mode"]))
         self.output_mode_var.set(OUTPUT_MODE_LABELS[configured_mode])
         self.custom_output_dir_var.set(str(config.get("custom_output_dir", "") or ""))
@@ -358,19 +357,9 @@ class ImageCompressorApp:
         configured_resize = str(config.get("resize", DEFAULT_CONFIG["resize"]))
         self.resize_entry.insert(0, "" if configured_resize == "不使用" else configured_resize)
 
-    def apply_input_paths(self, paths: object) -> None:
-        candidates = [str(item).strip() for item in (paths or []) if str(item).strip()]  # type: ignore[union-attr]
-        existing = [path for path in candidates if os.path.isfile(path)]
-        self.input_paths = existing
-        self.refresh_input_listbox()
-        missing_count = len(candidates) - len(existing)
-        if missing_count > 0:
-            self.append_log(f"已跳过 {missing_count} 个不存在的历史路径")
-
     def save_config(self) -> None:
         self.config_store.save(
             {
-                "input_paths": list(self.input_paths),
                 "output_mode": self.current_output_mode(),
                 "custom_output_dir": self.custom_output_dir_var.get().strip(),
                 "target_size_kb": self.size_entry.get(),

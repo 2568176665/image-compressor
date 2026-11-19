@@ -684,6 +684,8 @@ class CompressionService:
             else None
         )
         plans = [TransformPlan(requested_resize)]
+        if requested_resize is None:
+            return plans
         base_scale = max(0.15, min(0.95, math.sqrt(target_size / max(input_size, 1))))
         for factor in (1.0, 0.92, 0.84, 0.76, 0.68):
             plan = TransformPlan(requested_resize, max(0.1, base_scale * factor))

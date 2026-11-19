@@ -262,13 +262,56 @@ def test_resize_retry_keeps_final_output_within_target(tmp_path: Path) -> None:
     service = _service(calls, oversize_once=True)
 
     result = service.compress_file(
-        CompressionRequest(str(source), str(tmp_path / "out"), 500, "webp", None)
+        CompressionRequest(str(source), str(tmp_path / "out"), 500, "webp", "100%")
     )
 
     assert result.status == "completed"
     assert len(calls) >= 2
     assert result.output_file is not None
     assert Path(result.output_file).stat().st_size <= 500
+
+
+def test_no_resize_keeps_output_dimensions(tmp_path: Path) -> None:
+    source = tmp_path / "source.png"
+    _write_image(source, size=(80, 60))
+
+    def runner(command: list[str], **_kwargs) -> CommandResult:
+        with Image.open(command[-3]) as prepared:
+            prepared.save(command[-1], format="WEBP")
+        return CommandResult(returncode=0, stdout="", stderr="", cancelled=False)
+
+    service = CompressionService(encoder_paths={"webp": "webp.exe"}, command_runner=runner)
+    result = service.compress_file(
+        CompressionRequest(str(source), str(tmp_path / "out"), 20_000, "webp", None)
+    )
+
+    assert result.status == "completed"
+    assert result.output_file is not None
+    with Image.open(result.output_file) as output:
+        assert output.size == (80, 60)
+
+
+@pytest.mark.parametrize("resize_value", [None, "", "不使用"])
+def test_no_resize_does_not_shrink_to_reach_target(tmp_path: Path, resize_value: str | None) -> None:
+    source = tmp_path / "source.png"
+    _write_image(source)
+    sizes: list[tuple[int, int]] = []
+
+    def runner(command: list[str], **_kwargs) -> CommandResult:
+        with Image.open(command[-3]) as prepared:
+            sizes.append(prepared.size)
+        output = Path(command[-1])
+        Image.effect_noise((128, 128), 100).save(output, format="WEBP", quality=95)
+        return CommandResult(returncode=0, stdout="", stderr="", cancelled=False)
+
+    service = CompressionService(encoder_paths={"webp": "webp.exe"}, command_runner=runner)
+    result = service.compress_file(
+        CompressionRequest(str(source), str(tmp_path / "out"), 100, "webp", resize_value)
+    )
+
+    assert result.status == "failed"
+    assert sizes == [(64, 48)]
+    assert not list((tmp_path / "out").glob("*.webp"))
 
 
 def test_existing_output_is_never_overwritten_by_default(tmp_path: Path) -> None:
