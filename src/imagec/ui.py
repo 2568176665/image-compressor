@@ -434,7 +434,10 @@ class ImageCompressorApp:
         self.compress_button.config(state="disabled")
         self.cancel_button.config(state="normal")
         self.is_compressing = True
-        summary = f"开始压缩任务（{len(image_files)} 张，输出方式：{OUTPUT_MODE_LABELS[output_mode]}）"
+        summary = (
+            f"开始压缩任务（{len(image_files)} 张，目标上限：{target_size / 1024:g} KB，"
+            f"输出方式：{OUTPUT_MODE_LABELS[output_mode]}）"
+        )
         self.append_log(summary)
         logging.info(summary)
 

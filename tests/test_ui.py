@@ -14,6 +14,7 @@ from imagec.config import (
     AppPaths,
     ConfigStore,
 )
+from imagec.runtime import EnsureResult
 from imagec.ui import ImageCompressorApp, create_root
 
 
@@ -77,6 +78,34 @@ def test_ui_collects_multiple_images_without_persisting_them(monkeypatch, tmp_pa
     assert "input_paths" not in saved
     assert saved["output_mode"] == OUTPUT_MODE_SIBLING
     assert saved["allow_downscale"] is True
+
+
+def test_ui_passes_100kb_as_102400_bytes(monkeypatch, tmp_path: Path) -> None:
+    root, app = _make_app(monkeypatch, tmp_path)
+    try:
+        source = tmp_path / "image.png"
+        source.write_bytes(b"x")
+        app.add_paths([str(source)])
+        app.runtime_result = EnsureResult(encoder_paths={"webp": "encoder"}, ready=True, message="")
+        app.service.set_encoder_paths(app.runtime_result.encoder_paths)
+        captured: list[tuple] = []
+
+        class StubThread:
+            def __init__(self, *, target, args, daemon):
+                captured.append(args)
+
+            def start(self):
+                pass
+
+        monkeypatch.setattr("imagec.ui.threading.Thread", StubThread)
+        app.size_entry.delete(0, tk.END)
+        app.size_entry.insert(0, "100")
+        app.start_compression()
+
+        assert captured[0][3] == 102400
+        assert "目标上限：100 KB" in app.log_text.get("1.0", tk.END)
+    finally:
+        root.destroy()
 
 
 def test_add_button_matches_sibling_buttons_and_opens_menu(monkeypatch, tmp_path: Path) -> None:

@@ -322,6 +322,38 @@ def test_minimum_quality_is_attempted_before_downscale(
         assert calls[1][calls[1].index(quality_option) + 1] == quality_value
 
 
+def test_quality_fallback_searches_for_best_result_under_100kb(tmp_path: Path) -> None:
+    source = tmp_path / "source.png"
+    _write_image(source)
+    qualities: list[int] = []
+    targets: list[int] = []
+
+    def runner(command: list[str], **_kwargs) -> CommandResult:
+        if "-size" in command:
+            targets.append(int(command[command.index("-size") + 1]))
+            quality = 100
+        else:
+            quality = int(command[command.index("-q") + 1])
+            qualities.append(quality)
+        output = Path(command[-1])
+        Image.new("RGB", (8, 8)).save(output, format="WEBP")
+        with output.open("ab") as file_obj:
+            file_obj.write(b"x" * (1000 + quality * 1200))
+        return CommandResult(returncode=0, stdout="", stderr="", cancelled=False)
+
+    service = CompressionService(encoder_paths={"webp": "webp.exe"}, command_runner=runner)
+    result = service.compress_file(CompressionRequest(
+        str(source), str(tmp_path / "out"), 100 * 1024, "webp", None
+    ))
+
+    assert result.status == "completed"
+    assert targets == [102400]
+    assert qualities[0] == 0
+    assert max(qualities) > 0
+    assert result.output_size is not None
+    assert 100_000 < result.output_size <= 102400
+
+
 def test_downscale_only_after_minimum_quality_fails(tmp_path: Path) -> None:
     source = tmp_path / "source.png"
     _write_image(source)

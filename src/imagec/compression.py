@@ -525,13 +525,35 @@ class CompressionService:
         if result.status == "completed" or result.status == "cancelled" or result.timed_out:
             return result
 
-        if output_format == "jpg":
-            minimum_command = [encoder, str(source_png), str(output_file), "--quality=1", "--quiet"]
-        elif output_format == "webp":
-            minimum_command = [encoder, "-quiet", "-m", "6", "-q", "0", "-alpha_q", "0", str(source_png), "-o", str(output_file)]
-        else:
-            minimum_command = [encoder, "--speed", "6", "--jobs", "1", "--qcolor", "0", "--qalpha", "0", str(source_png), str(output_file)]
-        return self._run_and_validate(minimum_command, output_file, target_size)
+        def quality_command(quality: int) -> list[str]:
+            if output_format == "jpg":
+                return [encoder, str(source_png), str(output_file), f"--quality={quality}", "--quiet"]
+            if output_format == "webp":
+                return [encoder, "-quiet", "-m", "6", "-q", str(quality), "-alpha_q", str(quality), str(source_png), "-o", str(output_file)]
+            return [encoder, "--speed", "6", "--jobs", "1", "--qcolor", str(quality), "--qalpha", str(quality), str(source_png), str(output_file)]
+
+        minimum_quality = 1 if output_format == "jpg" else 0
+        result = self._run_and_validate(quality_command(minimum_quality), output_file, target_size)
+        if result.status != "completed":
+            return result
+
+        best_output = output_file.with_name(f"best-{output_file.name}")
+        shutil.copyfile(output_file, best_output)
+        low, high = minimum_quality + 1, 100
+        while low <= high:
+            quality = (low + high) // 2
+            result = self._run_and_validate(quality_command(quality), output_file, target_size)
+            if result.status == "cancelled" or result.timed_out:
+                return result
+            if result.status == "completed":
+                shutil.copyfile(output_file, best_output)
+                low = quality + 1
+            elif result.oversized:
+                high = quality - 1
+            else:
+                return result
+        shutil.copyfile(best_output, output_file)
+        return CompressionResult(status="completed", message=f"完成: {output_file.stem}", output_file=str(output_file))
 
     def _encode_png(
         self,
